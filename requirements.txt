@@ -23,3 +23,5 @@ timm
 omegaconf
 hydra-core
 wandb
+lpips
+supervision

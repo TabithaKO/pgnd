@@ -160,7 +160,7 @@ class GSProcessor:
                 os.makedirs(episode_data_dir / "gs", exist_ok=True)
                 intrs, extrs = load_camera(episode_data_dir)
 
-                pcd_paths = sorted(glob.glob(str(episode_data_dir / "pcd_clean_new" / "*.npz")))
+                pcd_paths = sorted(glob.glob(str(episode_data_dir / "pcd_clean" / "*.npz")))
                 n_frames = min(len(pcd_paths), self.max_frames)
 
                 assert start_frame < n_frames, f"episode {episode}"
@@ -176,7 +176,7 @@ class GSProcessor:
                 os.makedirs(episode_data_dir / "gs", exist_ok=True)
                 intrs, extrs = load_camera(episode_data_dir)
 
-                pcd_paths = sorted(glob.glob(str(episode_data_dir / "pcd_clean_new" / "*.npz")))
+                pcd_paths = sorted(glob.glob(str(episode_data_dir / "pcd_clean" / "*.npz")))
                 n_frames = min(len(pcd_paths), self.max_frames)
 
                 end_frame = n_frames
@@ -190,7 +190,7 @@ class GSProcessor:
                     print(f'[get_gaussian] already processed, skipping')
                     continue
 
-                pcd_npz = np.load(episode_data_dir / "pcd_clean_new" / f"{frame_id:06d}.npz")
+                pcd_npz = np.load(episode_data_dir / "pcd_clean" / f"{frame_id:06d}.npz")
 
                 pts = pcd_npz['pts']
                 colors = pcd_npz['colors']
@@ -272,12 +272,12 @@ class GSProcessor:
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--name', type=str, default='rope_merged')
+    parser.add_argument('--task', type=str, default='rope')
     parser.add_argument('--n_his_frames', type=int, default=6)
     parser.add_argument('--device', type=int, default=0)
     args = parser.parse_args()
 
     device = f"cuda:{args.device}"
 
-    pp = GSProcessor(args.name, args.n_his_frames, device)
+    pp = GSProcessor(args.task + '_merged', args.n_his_frames, device)
     pp.get_gaussian()

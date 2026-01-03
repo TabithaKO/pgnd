@@ -16,8 +16,7 @@
 <span class="author-block"><sup>1</sup>Columbia University,</span>
 <span class="author-block"><sup>2</sup>University of Illinois Urbana-Champaign</span>
 
-[Website](https://kywind.github.io/pgnd) |
-[Paper](https://www.roboticsproceedings.org/rss21/p036.pdf)
+[Website](https://kywind.github.io/pgnd) | [Paper](https://arxiv.org/abs/2506.15680)
 
 <img src="imgs/teaser.png" width="100%"/>
 
@@ -38,22 +37,30 @@ conda create -n pgnd python=3.10
 conda activate pgnd
 ```
 
-2. Install PyTorch: [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/)
+2. Install ```dgl``` and ```ffmpeg```:
 ```
-conda install pytorch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 pytorch-cuda=12.4 -c pytorch -c nvidia
-```
-
-3. Install other packages:
-```
-pip install -r requirements.txt
-conda install -c dglteam/label/th24_cu124 dgl
+conda install -c dglteam/label/th24_cu124 dgl  # although this requires cuda 12.4, it is tested that dgl can run normally with higher system and pytorch cuda versions.
 conda install conda-forge::ffmpeg
 ```
 
-4. Install diff_gaussian_rasterization:
+3. Install PyTorch: [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/). Make sure that the pytorch cuda version matches the system cuda version (```nvcc --version```). The torch version itself does not need to be strictly constrained. For example:
+
 ```
-cd third_party/diff-gaussian-rasterization-w-depth
-pip install -e .
+# if the system cuda version is 12.4:
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+# if the system cuda version is 12.8:
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+```
+
+4. Install other python packages:
+```
+pip install -r requirements.txt
+```
+
+4. Install ```diff_gaussian_rasterization```:
+```
+cd third-party/diff-gaussian-rasterization-w-depth
+pip install --no-build-isolation -e .
 ```
 
 ## Data and Checkpoints
@@ -138,16 +145,16 @@ python experiments/train/eval.py --task <material_name> --state_only
 
 ### Eval with 3DGS Rendering
 
-During evaluation, it is also possible to produce 3D Gaussian renderings and particle visualizations when the ```--state_only``` flag is removed. If the source dataset has not yet included reconstructed 3D Gaussians stored as ```.splat``` files (e.g. as in ```experiments/log/data/1018_sloth_processed/episode_0002/gs```), we need to run the GS training script:
-
-```
-python experiments/real_world/reconstruct_gs.py --name <merged_dataset_name>
-```
-
-This will save the ```.splat``` files in the aforementioned directories. Now, run the evaluation script without ```--state_only```: 
+During evaluation, it is also possible to produce 3D Gaussian renderings and particle visualizations when the ```--state_only``` flag is removed. For the downloaded datasets, they already include reconstructed 3D Gaussians stored as ```.splat``` files (e.g. as in ```experiments/log/data/1018_sloth_processed/episode_0002/gs```). To launch the eval, run:
 
 ```
 python experiments/train/eval.py --task <material_name>
+```
+
+For custom datasets, after data processing, there should be ```.../episode_xxxx/pcd_clean/``` folders with ```.npz``` files storing the segmented point clouds. From here, we need to run the GS training script, to save the ```.splat``` files in the `.../episode_xxxx/gs/` directories:
+
+```
+python experiments/real_world/reconstruct_gs.py --task <material_name>
 ```
 
 ### Planning
