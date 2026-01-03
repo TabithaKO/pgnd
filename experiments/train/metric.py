@@ -38,7 +38,7 @@ def calc_ssim(img1, img2, mask):
     return ssim_sk(img1, img2, data_range=255, mask=mask, multichannel=True, channel_axis=2)
 
 
-def mse_dist(xyz, xyz_gt):
+def mean_dist(xyz, xyz_gt):
     # xyz: (N, 3)
     # xyz_gt: (N, 3)
     return torch.mean(torch.norm(xyz - xyz_gt, 2, dim=1)).item()

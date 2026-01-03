@@ -724,9 +724,9 @@ class Trainer:
 
         metrics_list = np.array(metrics_list)[:, 0]  # (n_episodes, n_frames, 10 or 3)
         if self.use_gs:
-            metric_names = ['mse', 'chamfer', 'emd', 'jscore', 'fscore', 'jfscore', 'perception', 'psnr', 'ssim']
+            metric_names = ['mde', 'chamfer', 'emd', 'jscore', 'fscore', 'jfscore', 'perception', 'psnr', 'ssim']
         else:
-            metric_names = ['mse', 'chamfer', 'emd']
+            metric_names = ['mde', 'chamfer', 'emd']
     
         median_metric = np.median(metrics_list, axis=0)
         step_75_metric = np.percentile(metrics_list, 75, axis=0)

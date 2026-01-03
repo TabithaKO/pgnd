@@ -19,7 +19,7 @@ import json
 
 from pgnd.utils import get_root
 from pgnd.ffmpeg import make_video
-from train.metric import mse_dist, chamfer_dist, em_distance, compute_j, compute_f, compute_lpips, calc_psnr, calc_ssim, inverse_preprocess
+from train.metric import mean_dist, chamfer_dist, em_distance, compute_j, compute_f, compute_lpips, calc_psnr, calc_ssim, inverse_preprocess
 
 root: Path = get_root(__file__)
 
@@ -163,7 +163,7 @@ def do_metric(
 
             xyz_gt_downsampled = xyz_gt[downsample_indices]
 
-            mse = mse_dist(xyz, xyz_gt_downsampled)
+            mde = mean_dist(xyz, xyz_gt_downsampled)
             chamfer = chamfer_dist(xyz, xyz_gt)
             emd = em_distance(xyz, xyz_gt)
 
@@ -177,16 +177,16 @@ def do_metric(
                 ssim = calc_ssim(im, im_gt, mask_gt)
                 iou = np.sum(mask & mask_gt) / np.sum(mask | mask_gt)
 
-                metric_list.append([mse, chamfer, emd, jscore, fscore, jfscore, perception, psnr, ssim, iou])
+                metric_list.append([mde, chamfer, emd, jscore, fscore, jfscore, perception, psnr, ssim, iou])
                 print(f'{episode}, image: {i}, camera: {camera_id}', end=' ')
-                print(f'3D MSE: {mse:.4f}, 3D CD: {chamfer:.4f}, 3D EMD: {emd:.4f}', end=' ')
+                print(f'3D MDE: {mde:.4f}, 3D CD: {chamfer:.4f}, 3D EMD: {emd:.4f}', end=' ')
                 print(f'J-Score: {jscore:.4f}, F-Score: {fscore:.4f}, JF-Score: {jfscore:.4f}', end=' ')
                 print(f'perception: {perception:.4f}, PSNR: {psnr:.4f}, SSIM: {ssim:.4f}, IoU: {iou:.4f}')
 
             else:
-                metric_list.append([mse, chamfer, emd])
+                metric_list.append([mde, chamfer, emd])
                 print(f'{episode}, image: {i}', end=' ')
-                print(f'3D MSE: {mse:.4f}, 3D CD: {chamfer:.4f}, 3D EMD: {emd:.4f}')
+                print(f'3D MDE: {mde:.4f}, 3D CD: {chamfer:.4f}, 3D EMD: {emd:.4f}')
 
         # save metrics
         metric_list = np.array(metric_list)

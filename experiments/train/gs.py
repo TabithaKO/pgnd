@@ -270,7 +270,7 @@ class GSRenderer:
 
 
 def inverse_preprocess(cfg, p_x, grippers, source_data_root_episode):
-    dx = cfg.sim.num_grids_flexible[-1]
+    dx = cfg.sim.num_grids[-1]
 
     xyz_orig = np.load(source_data_root_episode / 'traj.npz')['xyz']
     xyz = torch.tensor(xyz_orig, dtype=torch.float32)

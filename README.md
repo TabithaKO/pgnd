@@ -87,6 +87,17 @@ For the checkpoints, the files should be unzipped and organized as the following
 ```
 The path needs to match exactly for training and inference scripts to work. If you need to use data in a different format, you may need to directly modify the code to accomodate.
 
+Additional asset files for Gaussian Splatting rendering (```gripper.splat``` and ```table.splat```) and gripper point sampling (```gripper_new.splat```) are available [here](https://drive.google.com/drive/u/1/folders/1g_7WI3PCvviJkN5quqIzTvvhznT0OtKf). 
+
+Download and put them in the ```experimentlog/gs/ckpts``` folder: 
+
+```
+- experiments/log/gs/ckpts
+  - gripper_new.splat
+  - gripper.splat
+  - table.splat
+```
+
 ## Custom Dataset
 
 For processing data from raw RGB-D recordings, the following pre-trained detection, segmentation, and tracking models are required. These can be installed by:
@@ -118,13 +129,26 @@ Training could take several hours on a single GPU with memory >= 24GB. It is pos
 
 ### Eval
 Use the following command to evaluate the trained policy on the evaluation dataset and verify its performance. 
-The file can also produce 3D Gaussian renderings and particle visualizations when the ```--state_only``` flag is removed
-and the source dataset contains reconstructed 3D Gaussians stored as ```.splat``` files (e.g. as in ```experiments/log/data/1018_sloth_processed/episode_0002/gs```).
+The results will be saved in the training folder, with three metrics measured over the validation set:
+MDE (Mean Distance Error), CD (Chamfer Distance), EMD (Earth Mover's Distance).
 
 ```
 python experiments/train/eval.py --task <material_name> --state_only
 ```
-Note: in the current dataset, some categories still lack GS reconstructions, hence evaluation can only include state-based metrics. The code for reconstruction will be released soon.
+
+### Eval with 3DGS Rendering
+
+During evaluation, it is also possible to produce 3D Gaussian renderings and particle visualizations when the ```--state_only``` flag is removed. If the source dataset has not yet included reconstructed 3D Gaussians stored as ```.splat``` files (e.g. as in ```experiments/log/data/1018_sloth_processed/episode_0002/gs```), we need to run the GS training script:
+
+```
+python experiments/real_world/reconstruct_gs.py --name <merged_dataset_name>
+```
+
+This will save the ```.splat``` files in the aforementioned directories. Now, run the evaluation script without ```--state_only```: 
+
+```
+python experiments/train/eval.py --task <material_name>
+```
 
 ### Planning
 It is possible to perform model-based planning for manipulation tasks using the learned dynamics model by running

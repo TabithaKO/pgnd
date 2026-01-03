@@ -381,10 +381,10 @@ def main(
     metrics_list = np.array(metrics_list)[:, 0]
 
     if metrics_list.shape[-1] == 10:
-        metric_names = ['mse', 'chamfer', 'emd', 'jscore', 'fscore', 'jfscore', 'perception', 'psnr', 'ssim', 'iou']
+        metric_names = ['mde', 'chamfer', 'emd', 'jscore', 'fscore', 'jfscore', 'perception', 'psnr', 'ssim', 'iou']
     else:
         assert metrics_list.shape[-1] == 3
-        metric_names = ['mse', 'chamfer', 'emd']
+        metric_names = ['mde', 'chamfer', 'emd']
 
     median_metric = np.median(metrics_list, axis=0)
     step_75_metric = np.percentile(metrics_list, 75, axis=0)
@@ -415,15 +415,15 @@ def main(
     std_metric_step = std_metric[n_steps]
 
     if mean_metric.shape[-1] == 10:
-        mse, chamfer, emd, jscore, fscore, jfscore, perception, psnr, ssim, iou = mean_metric_step
-        mse_std, chamfer_std, emd_std, jscore_std, fscore_std, jfscore_std, perception_std, psnr_std, ssim_std, iou_std = std_metric_step
-        print(f'3D MSE: {mse:.4f} {mse_std:.4f}, 3D CD: {chamfer:.4f} {chamfer_std:.4f}, 3D EMD: {emd:.4f} {emd_std:.4f}', end=' ')
+        mde, chamfer, emd, jscore, fscore, jfscore, perception, psnr, ssim, iou = mean_metric_step
+        mde_std, chamfer_std, emd_std, jscore_std, fscore_std, jfscore_std, perception_std, psnr_std, ssim_std, iou_std = std_metric_step
+        print(f'3D MDE: {mde:.4f} {mde_std:.4f}, 3D CD: {chamfer:.4f} {chamfer_std:.4f}, 3D EMD: {emd:.4f} {emd_std:.4f}', end=' ')
         print(f'J-Score: {jscore:.4f} {jscore_std:.4f}, F-Score: {fscore:.4f} {fscore_std:.4f}, JF-Score: {jfscore:.4f} {jfscore_std:.4f}', end=' ')
         print(f'perception: {perception:.4f} {perception_std:.4f}, PSNR: {psnr:.4f} {psnr_std:.4f}, SSIM: {ssim:.4f} {ssim_std:.4f}, IoU: {iou:.4f} {iou_std:.4f}')
     else:
-        mse, chamfer, emd = mean_metric_step
-        mse_std, chamfer_std, emd_std = std_metric_step
-        print(f'3D MSE: {mse:.4f} {mse_std:.4f}, 3D CD: {chamfer:.4f} {chamfer_std:.4f}, 3D EMD: {emd:.4f} {emd_std:.4f}')
+        mde, chamfer, emd = mean_metric_step
+        mde_std, chamfer_std, emd_std = std_metric_step
+        print(f'3D MDE: {mde:.4f} {mde_std:.4f}, 3D CD: {chamfer:.4f} {chamfer_std:.4f}, 3D EMD: {emd:.4f} {emd_std:.4f}')
 
 
 if __name__ == '__main__':

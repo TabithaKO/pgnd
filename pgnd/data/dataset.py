@@ -336,8 +336,8 @@ class RealTeleopBatchDataset(Dataset):
 
         x_his = torch.zeros((self.n_particles, 0), dtype=x.dtype, device=x.device)
         v_his = torch.zeros((self.n_particles, 0), dtype=v.dtype, device=v.device)
-        for his_id in range(1, self.n_history + 1):
-            his_frame = frame - his_id * self.skip_frame
+        for his_id in range(-self.n_history, 0):
+            his_frame = frame + his_id * self.skip_frame
             assert his_frame >= 0
             x_his_frame = self.episode_xs[episode][his_frame]
             v_his_frame = self.episode_vs[episode][his_frame]
@@ -345,7 +345,7 @@ class RealTeleopBatchDataset(Dataset):
             v_his_frame = v_his_frame[downsample_indices]
             x_his = torch.cat([x_his, x_his_frame], dim=-1)
             v_his = torch.cat([v_his, v_his_frame], dim=-1)
-    
+
         enabled = torch.ones(x.size(0), dtype=torch.bool)
         clip_bound = self.episode_clip_bound[episode]
         episode_vec = torch.tensor([episode, frame])
