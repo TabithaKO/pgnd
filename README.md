@@ -64,7 +64,7 @@ pip install --no-build-isolation -e .
 ```
 
 ## Data and Checkpoints
-The dataset and pre-trained checkpoint files could be downloaded from [this link](https://drive.google.com/drive/folders/10E0gpETbwA8d1XntIsP0fgWGHipndAe8?usp=sharing). 
+The dataset and pre-trained checkpoint files could be downloaded from [this link](https://drive.google.com/drive/folders/1JfZ7NBdkZm8T0WSse0cwY2GhflMd0eHV). 
 
 For the dataset, We provide the full training and evaluation datasets for all six categories. The dataset is stored as a zip file for each category, e.g. for box, all the data are stored in data_box.zip. The files should be unzipped and organized as the following (take box and sloth as examples; suppose the data for these two categories are downloaded):
 ```
@@ -115,12 +115,12 @@ pip install --no-deps git+https://github.com/IDEA-Research/GroundingDINO
 pip install --no-deps git+https://github.com/facebookresearch/sam2
 pip install --no-deps git+https://github.com/facebookresearch/co-tracker
 ```
-And the weights can be downloaded from [this link](https://drive.google.com/drive/folders/1Z70RgW7oiTIfvdk_qOOtqDGsMFQ0jimY?usp=sharing). Extract files and put them in the ```weights/``` folder.
+And the weights can be downloaded from [this link](https://drive.google.com/drive/folders/1AOlS6NafyrKyMyV962UeKbU0wxsDzqBw). Extract files and put them in the ```weights/``` folder.
 
 The raw data should contain multi-view rgb and depth image recordings, and robot end-effector translation/rotation/gripper openness recordings. An example of raw data is available at 
-[this link](https://drive.google.com/drive/folders/1QQ2ftIJZWFGzBeFg3bxqy6ktsUgmsHts?usp=drive_link) and could be extracted to ```experiments/log/data/cloth_test```. 
+[this link](https://drive.google.com/drive/folders/1Dk-TyyMUo2486zTKRqsqA93eXfz5zsMl) and could be extracted to ```experiments/log/data/cloth_test```. 
 
-For data processing, the following command runs the data processing code and generates the processed dataset with point tracks:
+For data processing, the following command runs the data processing code and generates the processed dataset with point tracks: (if you are not using the example raw data, please specify the dataset name to solve, dataset dirs, and other arguments under ```if __name__ == '__main__'``` in ```postprocess.py``` according to your own dataset naming)
 ```
 python experiments/real_world/postprocess.py
 ```
@@ -130,7 +130,7 @@ Once the datasets are prepared, we provide training scripts in the ```experiment
 ```
 bash experiments/scripts/train_<material_name>.sh
 ```
-Training could take several hours on a single GPU with memory >= 24GB. It is possible to plot training loss and visualize predictions during validation in wandb with cfg.debug=False.
+Training could take several hours on a single GPU with memory >= 24GB. It is possible to plot training loss and visualize predictions during validation in wandb with cfg.debug=False. If there is a cuda out-of-memory error, you can consider reducing the batch size.
 
 ## Inference
 
@@ -151,10 +151,10 @@ During evaluation, it is also possible to produce 3D Gaussian renderings and par
 python experiments/train/eval.py --task <material_name>
 ```
 
-For custom datasets, after data processing, there should be ```.../episode_xxxx/pcd_clean/``` folders with ```.npz``` files storing the segmented point clouds. From here, we need to run the GS training script, to save the ```.splat``` files in the `.../episode_xxxx/gs/` directories:
+For custom datasets, after data processing, there should be ```.../<data_dir_name>/episode_xxxx/pcd_clean/``` folders with ```.npz``` files storing the segmented point clouds. From here, we need to run the GS training script, to save the ```.splat``` files in the `.../<data_dir_name>/episode_xxxx/gs/` directories:
 
 ```
-python experiments/real_world/reconstruct_gs.py --task <material_name>
+python experiments/real_world/reconstruct_gs.py --task <data_dir_name>
 ```
 
 ### Planning

@@ -1,31 +1,20 @@
-from typing import Union
 from pathlib import Path
 import argparse
 import os
-import subprocess
 import numpy as np
 import glob
 import cv2
 import torch
-import shutil
-from PIL import Image
-from sklearn.neighbors import NearestNeighbors
-import supervision as sv
 import open3d as o3d
-import time
 import yaml
-import json
 from dgl.geometry import farthest_point_sampler
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from pgnd.utils import get_root
-from pgnd.ffmpeg import make_video
 root: Path = get_root(__file__)
 
-from utils.pcd_utils import visualize_o3d, depth2fgpcd
-from utils.env_utils import get_bounding_box
 from gs.trainer import GSTrainer
 from gs.convert import save_to_splat
 
@@ -80,106 +69,41 @@ def reproject(depth, intr, extr):
 
 class GSProcessor:
 
-    def __init__(self, name, n_his_frames, device='cuda', episode_range=None):
+    def __init__(self, name, n_his_frames, device='cuda', episode_range=None, n_cameras=4, H=480, W=848):
         self.name = name
         self.n_his_frames = n_his_frames
         self.data_dir = root / "log" / "data" / name
         
         self.device = device
 
-        if 'merged' in name:
-            self.is_merged = True
-            assert os.path.exists(self.data_dir)
-            info = json.load(open(self.data_dir / 'sub_episodes_v' / 'info.json'))
-
-            source_eval_list_all = []
-            for source_dir, episode_list in info.items():
-                if source_dir in ['n_train', 'n_eval']:
-                    continue
-
-                source_name = Path(source_dir).parent.name
-
-                eval_episode_start, eval_episode_end = episode_list[2], episode_list[3]
-
-                source_eval_list = []  # (episode_id, start_frame, end_frame)
-                
-                source_data_dir = root.parent / Path(source_dir).parent
-                if not os.path.exists(root.parent / source_dir):
-                    source_data_dir = Path('/data/meta-material/data') / source_name
-
-                for eval_episode in range(eval_episode_start, eval_episode_end):
-                    assert os.path.exists(source_data_dir / 'sub_episodes_v' / f'episode_{eval_episode:04d}' / 'meta.txt')
-                    meta = np.loadtxt(source_data_dir / 'sub_episodes_v' / f'episode_{eval_episode:04d}' / 'meta.txt')
-
-                    source_eval_list.append((source_data_dir, int(meta[0]), int(meta[1]), int(meta[2])))
-
-                source_eval_list_all.append(source_eval_list)
-            
-            episode_range = source_eval_list_all
-
-        else:
-            self.is_merged = False
-            if episode_range is None:
-                n_episodes = len(glob.glob(str(self.data_dir / "episode*")))
-                episode_range = np.arange(n_episodes)
+        if episode_range is None:
+            n_episodes = len(glob.glob(str(self.data_dir / "episode*")))
+            episode_range = np.arange(n_episodes)
 
         self.episodes = episode_range
-
-        n_cameras = 4
         self.cameras = np.arange(n_cameras)
-
+        self.H, self.W = H, W
         self.max_frames = 10000
-        self.H, self.W = 480, 848
-        self.bbox = get_bounding_box()  # 3D bounding box of the scene
 
         with open(root / "real_world" / "gs" / "config" / "default.yaml", 'r') as f:
             gs_config = yaml.load(f, Loader=yaml.CLoader)
 
         self.gs_trainer = GSTrainer(gs_config, device=self.device)
-    
+
     def get_gaussian(self):
-        if self.is_merged:
-            for source_eval_list in self.episodes:
-                self.get_gaussian_single_source(source_eval_list)
-        else:
-            self.get_gaussian_single_source(self.episodes)
+        for episode in self.episodes:
+            episode = int(episode)
+            data_dir = self.data_dir
+            episode_id = episode
+            start_frame = 0
 
-    def get_gaussian_single_source(self, episodes):
-        for episode in episodes:
+            episode_data_dir = data_dir / f"episode_{episode_id:04d}"
+            os.makedirs(episode_data_dir / "gs", exist_ok=True)
+            intrs, extrs = load_camera(episode_data_dir)
 
-            if isinstance(episode, tuple):
-                data_dir = episode[0]
-
-                episode_id = episode[1]
-                start_frame = episode[2]
-                end_frame = episode[3]
-
-                start_frame = start_frame + self.n_his_frames
-                
-                episode_data_dir = data_dir / f"episode_{episode_id:04d}"
-                os.makedirs(episode_data_dir / "gs", exist_ok=True)
-                intrs, extrs = load_camera(episode_data_dir)
-
-                pcd_paths = sorted(glob.glob(str(episode_data_dir / "pcd_clean" / "*.npz")))
-                n_frames = min(len(pcd_paths), self.max_frames)
-
-                assert start_frame < n_frames, f"episode {episode}"
-                assert end_frame <= n_frames
-                
-            else:
-                episode = int(episode)
-                data_dir = self.data_dir
-                episode_id = episode
-                start_frame = 0
-
-                episode_data_dir = data_dir / f"episode_{episode_id:04d}"
-                os.makedirs(episode_data_dir / "gs", exist_ok=True)
-                intrs, extrs = load_camera(episode_data_dir)
-
-                pcd_paths = sorted(glob.glob(str(episode_data_dir / "pcd_clean" / "*.npz")))
-                n_frames = min(len(pcd_paths), self.max_frames)
-
-                end_frame = n_frames
+            pcd_paths = sorted(glob.glob(str(episode_data_dir / "pcd_clean" / "*.npz")))
+            n_frames = min(len(pcd_paths), self.max_frames)
+            end_frame = n_frames
 
             pivot_skip = 120
 
@@ -272,12 +196,13 @@ class GSProcessor:
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--task', type=str, default='rope')
+    parser.add_argument('--task', type=str, default='1018_sloth_processed')
     parser.add_argument('--n_his_frames', type=int, default=6)
+    parser.add_argument('--n_cameras', type=int, default=4)
     parser.add_argument('--device', type=int, default=0)
     args = parser.parse_args()
 
     device = f"cuda:{args.device}"
 
-    pp = GSProcessor(args.task + '_merged', args.n_his_frames, device)
+    pp = GSProcessor(args.task, args.n_his_frames, device, n_cameras=args.n_cameras)
     pp.get_gaussian()

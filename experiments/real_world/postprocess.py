@@ -1139,26 +1139,19 @@ class PostProcessor:
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--data_id', type=int, default=-1)
-    parser.add_argument('--name', type=str, default='')
-    parser.add_argument('--bimanual', action='store_true')
-    parser.add_argument('--text_prompts', type=str, default='')
-    args = parser.parse_args()
-
     # for example, if you have experiments/log/data/cloth_test:
-    if args.name == '':
-        args.name = 'cloth_test_processed'
-        args.text_prompts = 'cloth.'
-        dirs = {
-            'cloth_test/recording_1': ['1734933804']  # could have multiple entries
-        }
-        eef_T = [0, 0, -0.01]
-        cameras = None
+    name = 'cloth_test_processed'
+    text_prompts = 'cloth.'
+    bimanual = True
+    dirs = {
+        'cloth_test/recording_1': ['1734933804']  # could have multiple entries
+    }
+    eef_T = [0, 0, -0.01]  # end effector offset
+    cameras = None
 
-    # match_timestamps(args.name, dirs)
+    match_timestamps(name, dirs)
 
-    pp = PostProcessor(args.name, args.bimanual, args.text_prompts, cameras=cameras, eef_T=eef_T)
+    pp = PostProcessor(name, bimanual, text_prompts, cameras=cameras, eef_T=eef_T)
     pp.run_sam2()
     pp.get_tracking()
     pp.get_pcd()

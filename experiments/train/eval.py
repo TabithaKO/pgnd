@@ -39,7 +39,7 @@ def eval(
     ckpt_path: str,
     episode: int,
     dataset_pv: bool = True,
-    eval_base_name: str = 'eval-val',
+    eval_base_name: str = 'eval',
     use_pv: bool = True,
     use_gs: bool = True,
 ):
@@ -363,16 +363,14 @@ def main(
         if "eval_state_only" in cfg and cfg.eval_state_only:
             use_pv = False
             use_gs = False
-            eval_base_name = 'eval_state'
         else:
             use_pv = True
             use_gs = True
-            eval_base_name = 'eval'
         metrics = eval(cfg,
             None,
             episode,
             dataset_pv=True,
-            eval_base_name=eval_base_name,
+            eval_base_name='eval',
             use_pv=use_pv, 
             use_gs=use_gs,
         )
