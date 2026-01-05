@@ -20,6 +20,13 @@
 
 <img src="imgs/teaser.png" width="100%"/>
 
+## Updates
+- **[2026/01/05]** Minor updates to the training and evaluation scripts; fixed bugs, cleaned the dataset, updated dataset links, and revised the installation guide.
+
+- **[2025/07/07]** Updated the custom dataset processing pipeline.
+
+- **[2025/06/18]** Initial release of the PGND codebase, including training and evaluation scripts, datasets, and pretrained checkpoints.
+
 ## Interactive Demo
 We provide an [interactive demo](https://huggingface.co/spaces/kaifz/pgnd) in Huggingface Spaces.
 
