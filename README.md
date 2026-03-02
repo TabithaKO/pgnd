@@ -4,6 +4,8 @@ This is my fork of [PGND (Particle-Grid Neural Dynamics)](https://github.com/kyw
 
 The goal: take a state-of-the-art learned cloth dynamics method, get it running on data I collected from my own robot, and then extend it — first with a differentiable render loss during training, then with live camera conditioning at rollout time.
 
+*Image below is from the original PGND authors and shows their benchmark setup, not my hardware or results.*
+
 ![PGND teaser](imgs/teaser.png)
 
 ---
