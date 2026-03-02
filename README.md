@@ -1,188 +1,122 @@
-# Particle-Grid Neural Dynamics for Learning Deformable Object Models from RGB-D Videos
+# PGND — Visual Conditioning Experiments on Real Cloth Data
 
-<span class="author-block">
-<a target="_blank" href="https://kywind.github.io/">Kaifeng Zhang</a><sup>1</sup>,
-</span>
-<span class="author-block">
-<a target="_blank" href="https://boey-li.github.io/">Baoyu Li</a><sup>2</sup>,
-</span>
-<span class="author-block">
-<a target="_blank" href="https://kkhauser.web.illinois.edu/">Kris Hauser</a><sup>2</sup>,
-</span>
-<span class="author-block">
-<a target="_blank" href="https://yunzhuli.github.io/">Yunzhu Li</a><sup>1</sup>
-</span>
+This is my fork of [PGND (Particle-Grid Neural Dynamics)](https://github.com/kywind/pgnd), extended with three model variants that progressively add visual supervision and camera conditioning on top of the baseline.
 
-<span class="author-block"><sup>1</sup>Columbia University,</span>
-<span class="author-block"><sup>2</sup>University of Illinois Urbana-Champaign</span>
+The goal: take a state-of-the-art learned cloth dynamics method, get it running on data I collected from my own robot, and then extend it — first with a differentiable render loss during training, then with live camera conditioning at rollout time.
 
-[Website](https://kywind.github.io/pgnd) | [Paper](https://arxiv.org/abs/2506.15680)
+![PGND teaser](imgs/teaser.png)
 
-<img src="imgs/teaser.png" width="100%"/>
+---
 
-## Updates
-- **[2026/01/05]** Minor updates to the training and evaluation scripts; fixed bugs, cleaned the dataset, updated dataset links, and revised the installation guide.
+## Background
 
-- **[2025/07/07]** Updated the custom dataset processing pipeline.
+PGND learns deformable object dynamics from RGB-D video using a particle-grid hybrid representation. The baseline model predicts cloth state purely from geometry (particle positions and velocities), autoregressively rolling out future states from an initial condition.
 
-- **[2025/06/18]** Initial release of the PGND codebase, including training and evaluation scripts, datasets, and pretrained checkpoints.
+My experiments use this as the starting point, adding visual signals at two stages: during training (render loss) and at rollout time (camera conditioning).
 
-## Interactive Demo
-We provide an [interactive demo](https://huggingface.co/spaces/kaifz/pgnd) in Huggingface Spaces.
+---
 
-## Installation
+## The Three Models
 
-### Prerequisite
+### Baseline (100k steps)
 
-We recommend installing the latest version of CUDA (12.x) and PyTorch. The CUDA version used to compile PyTorch should be the same as the system's CUDA version to enable installation of the ```diff_gaussian_rasterizer``` package.
+Standard PGND training on my cloth dataset. Supervises on particle position loss (`loss_x`, MSE per step) only — no visual signal, no camera input. Predicts cloth dynamics purely from geometric state.
 
-### Setup an environment
+**Key files:** `experiments/train/train_eval.py`, `experiments/train/eval.py`
 
-1. Prepare python environment
-```
-conda create -n pgnd python=3.10
-conda activate pgnd
-```
+---
 
-2. Install ```dgl``` and ```ffmpeg```:
-```
-conda install -c dglteam/label/th24_cu124 dgl  # although this requires cuda 12.4, it is tested that dgl can run normally with higher system and pytorch cuda versions.
-conda install conda-forge::ffmpeg
-```
+### Phase 2 — Render Loss (40k steps)
 
-3. Install PyTorch: [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/). Make sure that the pytorch cuda version matches the system cuda version (```nvcc --version```). The torch version itself does not need to be strictly constrained. For example:
+Adds a differentiable render loss on top of the baseline to penalise predictions that are geometrically plausible but visually wrong.
 
-```
-# if the system cuda version is 12.4:
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
-# if the system cuda version is 12.8:
-pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
-```
+**What it does:**
+- A frozen `diff-gaussian-rasterizer` projects predicted particle state into camera space
+- Rendered frames are compared against ground truth RGB using two losses:
+  - `λ_render = 0.1` — DINOv2 feature distance (semantic similarity)
+  - `λ_ssim = 0.2` — SSIM (structural similarity)
+- The render loss gradient flows back through the rasterizer into the dynamics model
 
-4. Install other python packages:
-```
-pip install -r requirements.txt
-```
+**Why this matters:** The position loss (MSE on particles) can be satisfied by predictions that look wrong visually — cloth bunched in the wrong place, wrong fold direction, etc. The render loss adds a signal that's sensitive to visual appearance, not just particle distance.
 
-4. Install ```diff_gaussian_rasterization```:
-```
-cd third-party/diff-gaussian-rasterization-w-depth
-pip install --no-build-isolation -e .
-```
+**Key files:** `experiments/train/render_loss.py`, `experiments/train/train_eval_render_loss.py`
 
-## Data and Checkpoints
-The dataset and pre-trained checkpoint files could be downloaded from [this link](https://drive.google.com/drive/folders/1JfZ7NBdkZm8T0WSse0cwY2GhflMd0eHV). 
+---
 
-For the dataset, We provide the full training and evaluation datasets for all six categories. The dataset is stored as a zip file for each category, e.g. for box, all the data are stored in data_box.zip. The files should be unzipped and organized as the following (take box and sloth as examples; suppose the data for these two categories are downloaded):
-```
-- experiments/log/data
-  - 0112_box_processed
-  - 0112_box2_processed
-  - 0112_box3_processed
-  - 1018_sloth_processed
-  - box_merged
-  - sloth_merged
-  ...
-```
-For the checkpoints, the files should be unzipped and organized as the following:
-```
-- experiments/log
-  - box
-    - train
-      - ckpts
-        - 100000.pt
-      - hydra.yaml
-  - sloth
-    - train
-      - ckpts
-        - 100000.pt
-      - hydra.yaml
-  ...
-```
-The path needs to match exactly for training and inference scripts to work. If you need to use data in a different format, you may need to directly modify the code to accomodate.
+### Visual PGND (70k steps)
 
-Additional asset files for Gaussian Splatting rendering (```gripper.splat``` and ```table.splat```) and gripper point sampling (```gripper_new.splat```) are available [here](https://drive.google.com/drive/u/1/folders/1g_7WI3PCvviJkN5quqIzTvvhznT0OtKf). 
+Takes the render loss further and adds camera conditioning at rollout time, so the model can see when its predictions have drifted from reality.
 
-Download and put them in the ```experimentlog/gs/ckpts``` folder: 
+**Two changes on top of Phase 2:**
 
-```
-- experiments/log/gs/ckpts
-  - gripper_new.splat
-  - gripper.splat
-  - table.splat
-```
+1. **Mesh-constrained Gaussian Splatting** — instead of using LBS (linear blend skinning) to approximate how Gaussians deform with the particle mesh, each Gaussian is bound directly to a face of the particle mesh and deforms with it exactly. This removes an approximation error that limited how sharp the render loss gradient could be in Phase 2.
 
-## Custom Dataset
+2. **Camera conditioning at rollout** — a frozen DINOv2 backbone encodes the current camera observation at each rollout step. This feature is injected into the dynamics model as an additional input, giving it a correction signal: if predicted state drifts from what the cameras see, the model can self-correct rather than compounding the error.
 
-For processing data from raw RGB-D recordings, the following pre-trained detection, segmentation, and tracking models are required. These can be installed by:
-```
-pip install iopath
-pip install segment-anything
-pip install --no-deps git+https://github.com/IDEA-Research/GroundingDINO
-pip install --no-deps git+https://github.com/facebookresearch/sam2
-pip install --no-deps git+https://github.com/facebookresearch/co-tracker
-```
-And the weights can be downloaded from [this link](https://drive.google.com/drive/folders/1AOlS6NafyrKyMyV962UeKbU0wxsDzqBw). Extract files and put them in the ```weights/``` folder.
+**Key files:**
+- `experiments/train/pgnd_visual.py` — visual PGND model definition
+- `experiments/train/mesh_gaussian_model.py` — mesh-constrained Gaussian representation
+- `experiments/train/visual_encoder.py` — DINOv2 feature encoder for camera conditioning
+- `experiments/train/train_eval_visual.py` — training loop for visual PGND
+- `experiments/train/anchor_gaussians_to_mesh.py` — binds Gaussians to mesh faces
 
-The raw data should contain multi-view rgb and depth image recordings, and robot end-effector translation/rotation/gripper openness recordings. An example of raw data is available at 
-[this link](https://drive.google.com/drive/folders/1Dk-TyyMUo2486zTKRqsqA93eXfz5zsMl) and could be extracted to ```experiments/log/data/cloth_test```. 
+---
 
-For data processing, the following command runs the data processing code and generates the processed dataset with point tracks: (if you are not using the example raw data, please specify the dataset name to solve, dataset dirs, and other arguments under ```if __name__ == '__main__'``` in ```postprocess.py``` according to your own dataset naming)
-```
-python experiments/real_world/postprocess.py
-```
+## Evaluation
 
-## Training
-Once the datasets are prepared, we provide training scripts in the ```experiments/scripts``` folder. 
-```
-bash experiments/scripts/train_<material_name>.sh
-```
-Training could take several hours on a single GPU with memory >= 24GB. It is possible to plot training loss and visualize predictions during validation in wandb with cfg.debug=False. If there is a cuda out-of-memory error, you can consider reducing the batch size.
+All three models are evaluated on held-out episodes, rolling out 30 steps autoregressively from ground truth initial conditions. Three metrics:
 
-## Inference
+- **MDE (Mean Displacement Error)** — average per-particle Euclidean distance to ground truth. Sensitive to individual particle drift.
+- **Chamfer Distance** — bidirectional nearest-neighbour distance between predicted and GT point clouds. Penalises large-scale shape mismatch without requiring correspondence.
+- **EMD (Earth Mover's Distance)** — minimum transport cost to match predicted to GT distribution. More sensitive to global deformation failure modes than Chamfer.
 
-### Eval
-Use the following command to evaluate the trained policy on the evaluation dataset and verify its performance. 
-The results will be saved in the training folder, with three metrics measured over the validation set:
-MDE (Mean Distance Error), CD (Chamfer Distance), EMD (Earth Mover's Distance).
+![Aggregate evaluation metrics](https://tabithako.github.io/assets/images/cloth-dynamics-aggregate-metrics.png)
 
-```
-python experiments/train/eval.py --task <material_name> --state_only
-```
+*Prediction error over 30 rollout steps. Lower is better; all metrics grow with rollout horizon as errors compound.*
 
-### Eval with 3DGS Rendering
+### Model comparison on episode 0201
 
-During evaluation, it is also possible to produce 3D Gaussian renderings and particle visualizations when the ```--state_only``` flag is removed. For the downloaded datasets, they already include reconstructed 3D Gaussians stored as ```.splat``` files (e.g. as in ```experiments/log/data/1018_sloth_processed/episode_0002/gs```). To launch the eval, run:
+The same held-out cloth manipulation rollout predicted by each model:
 
-```
-python experiments/train/eval.py --task <material_name>
-```
+| Model | Video |
+|-------|-------|
+| Baseline (100k) — geometry only | [video](https://tabithako.github.io/assets/videos/pgnd-ep0201-baseline.mp4) |
+| Phase 2 (40k) — + DINOv2 render loss + SSIM | [video](https://tabithako.github.io/assets/videos/pgnd-ep0201-phase2.mp4) |
+| Visual PGND (70k) — + mesh GS + camera conditioning | [video](https://tabithako.github.io/assets/videos/pgnd-ep0201-visual.mp4) |
 
-For custom datasets, after data processing, there should be ```.../<data_dir_name>/episode_xxxx/pcd_clean/``` folders with ```.npz``` files storing the segmented point clouds. From here, we need to run the GS training script, to save the ```.splat``` files in the `.../<data_dir_name>/episode_xxxx/gs/` directories:
+All episodes — baseline vs. visual PGND: [video](https://tabithako.github.io/assets/videos/pgnd-comparison-all.mp4)
 
-```
-python experiments/real_world/reconstruct_gs.py --task <data_dir_name>
-```
+Full writeup: [tabithako.github.io/projects/cloth-dynamics](https://tabithako.github.io/projects/cloth-dynamics)
 
-### Planning
-It is possible to perform model-based planning for manipulation tasks using the learned dynamics model by running
-```
-python experiments/real_world/plan.py --config <model_yaml_path> --text_prompts <prompts>
-```
-This requires building a xArm robot setup with realsense cameras, and calibrating them by
-```
-python experiments/real_world/calibrate.py [--calibrate/--calibrate_bimanual]
-```
-The calibration board needs to be put in a specific position relative to the robot to fix the robot-to-board transformation, and the camera-to-board transformations are processed using OpenCV detection algorithms. For questions about real robot setups, please feel free to reach out to the first author of the paper. We are working to release a more detailed instruction on real robot experiments soon.
+---
 
+## Additional Tools
 
-## Citation
-If you find this repo useful for your research, please consider citing our paper
-```
-@inproceedings{zhang2025particle,
-  title={Particle-Grid Neural Dynamics for Learning Deformable Object Models from RGB-D Videos},
-  author={Zhang, Kaifeng and Li, Baoyu and Hauser, Kris and Li, Yunzhu},
-  booktitle={Proceedings of Robotics: Science and Systems (RSS)},
-  year={2025}
-}
-```
+### PhysTwin Integration
+- `experiments/train/convert_pgnd_to_phystwin.py` — converts PGND episode format to PhysTwin for cross-pipeline comparison
+- `experiments/train/test_phystwin_generalization.py` — evaluates how well PhysTwin-fitted parameters generalise to novel PGND episodes
+
+### Ablation Infrastructure
+- `experiments/train/compare_3_ablations.py` / `compare_ablations.py` / `compare_phase2.py` — side-by-side rollout comparisons across model variants
+- `experiments/train/generate_eval_videos.py` — batch video generation for the full held-out eval set
+- `experiments/train/viz_phase2.py` — Phase 2 render loss visualisation
+
+### Data
+- `episode_matches.json` — maps PGND episode IDs to corresponding PhysTwin trajectory recordings for cross-pipeline evaluation
+
+---
+
+## What I Learned
+
+**The perception pipeline is where the real work is.** Getting CoTracker running reliably on my specific cameras, lighting, and occlusion patterns required more iteration than training the dynamics model. Data quality limits everything downstream.
+
+**Visual conditioning helps but training is fragile.** DINOv2 features add useful signal, but the render loss curriculum schedule matters a lot. Phase 2 is the most stable improvement; Visual PGND at 70k is still training.
+
+**Evaluation set size matters.** A 5-episode eval showed a 20% improvement. A 40-episode eval showed ~1%. The 40-episode numbers are the ones I use.
+
+---
+
+## Original Paper
+
+**Learning Particle Dynamics for Manipulating Rigid Bodies, Deformable Objects, and Fluids**
+Yunzhu Li et al. — [project page](https://github.com/kywind/pgnd)
