@@ -24,7 +24,7 @@ My experiments use this as the starting point, adding visual signals at two stag
 
 Standard PGND training on my cloth dataset. Supervises on particle position loss (`loss_x`, MSE per step) only — no visual signal, no camera input. Predicts cloth dynamics purely from geometric state.
 
-<video src="https://tabithako.github.io/assets/videos/pgnd-ep0201-baseline.mp4" autoplay loop muted playsinline></video>
+*Rollout video: [baseline ep0201](https://tabithako.github.io/assets/videos/pgnd-ep0201-baseline.mp4)*
 
 **Key files:** `experiments/train/train_eval.py`, `experiments/train/eval.py`
 
@@ -45,7 +45,7 @@ Adds a differentiable render loss on top of the baseline to penalise predictions
 
 **Key files:** `experiments/train/render_loss.py`, `experiments/train/train_eval_render_loss.py`
 
-<video src="https://tabithako.github.io/assets/videos/pgnd-ep0201-phase2.mp4" autoplay loop muted playsinline></video>
+*Rollout video: [phase 2 ep0201](https://tabithako.github.io/assets/videos/pgnd-ep0201-phase2.mp4)*
 
 ---
 
@@ -66,7 +66,7 @@ Takes the render loss further and adds camera conditioning at rollout time, so t
 - `experiments/train/train_eval_visual.py` — training loop for visual PGND
 - `experiments/train/anchor_gaussians_to_mesh.py` — binds Gaussians to mesh faces
 
-<video src="https://tabithako.github.io/assets/videos/pgnd-ep0201-visual.mp4" autoplay loop muted playsinline></video>
+*Rollout video: [visual PGND ep0201](https://tabithako.github.io/assets/videos/pgnd-ep0201-visual.mp4)*
 
 ---
 
@@ -92,9 +92,9 @@ The same held-out cloth manipulation rollout predicted by each model:
 | Phase 2 (40k) — + DINOv2 render loss + SSIM | [video](https://tabithako.github.io/assets/videos/pgnd-ep0201-phase2.mp4) |
 | Visual PGND (70k) — + mesh GS + camera conditioning | [video](https://tabithako.github.io/assets/videos/pgnd-ep0201-visual.mp4) |
 
-<video src="https://tabithako.github.io/assets/videos/pgnd-comparison-all.mp4" autoplay loop muted playsinline></video>
+![Cloth tracking](https://tabithako.github.io/assets/images/cloth-dynamics-tracking.gif)
 
-*All episodes — baseline vs. visual PGND*
+*All episodes comparison: [video](https://tabithako.github.io/assets/videos/pgnd-comparison-all.mp4)*
 
 Full writeup: [tabithako.github.io/projects/cloth-dynamics](https://tabithako.github.io/projects/cloth-dynamics)
 
