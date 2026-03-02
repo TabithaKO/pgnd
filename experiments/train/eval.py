@@ -31,7 +31,7 @@ from pv_dataset import do_dataset_pv
 from metric_eval import do_metric
 from train_eval import transform_gripper_points, dataloader_wrapper
 
-root: Path = get_root(__file__)
+root: Path = get_root(__file__)do you recall how long it took to train the baseline? It was a couple of minutes
 
 
 def eval(
@@ -401,7 +401,7 @@ def main(
         x = np.arange(1, len(median_metric) + 1)
         ax.fill_between(x, step_25_metric[:, i], step_75_metric[:, i], alpha=0.2)
 
-        save_dir = root / 'log' / cfg.train.name / eval_base_name / cfg.train.dataset_name.split("/")[-1] / f'{cfg.iteration:06d}' / 'metric'
+        save_dir = root / "log" / cfg.train.name / "eval" / cfg.train.dataset_name.split("/")[-1] / f"{cfg.iteration:06d}" / "metric"
         plt.savefig(os.path.join(save_dir, f'{i:02d}-{metric_name}.png'))
         plt.close()
 

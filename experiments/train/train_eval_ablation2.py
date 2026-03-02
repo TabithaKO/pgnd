@@ -30,318 +30,9 @@ from train.pv_train import do_train_pv
 from train.pv_dataset import do_dataset_pv
 from train.metric_eval import do_metric
 
-### RENDER LOSS ### Import render loss module
-try:
-    from train.render_loss import create_render_loss_module
-except ImportError:
-    create_render_loss_module = None
-
-try:
-    from train.render_loss_ablation2 import create_render_loss_module_ablation2
-except ImportError:
-    create_render_loss_module_ablation2 = None
-
-try:
-    from train.render_loss_multicam import create_render_loss_module_ablation2 as create_render_loss_multicam
-except ImportError:
-    create_render_loss_multicam = None
-### END RENDER LOSS ###
-
-### PHASE 2 VISUALIZATION ### Imports and helpers for training debug panels
-import cv2
-import torch.nn.functional as F
-
-
-def _draw_point_cloud(pts, h, w, color, label, cam_settings=None, coord_transform=None):
-    """Draw point cloud projected to camera view."""
-    canvas = np.zeros((h, w, 3), dtype=np.uint8)
-    pts_np = pts.detach().cpu().numpy() if torch.is_tensor(pts) else pts
-
-    if cam_settings is not None and coord_transform is not None:
-        pts_t = torch.tensor(pts_np, dtype=torch.float32).cuda()
-        pts_world = coord_transform.inverse_transform(pts_t).cpu().numpy()
-        K = cam_settings['k']
-        w2c = cam_settings['w2c']
-        R_cam = w2c[:3, :3]
-        t_cam = w2c[:3, 3]
-        pts_cam = (R_cam @ pts_world.T + t_cam.reshape(3, 1)).T
-        pts_2d = (K @ pts_cam.T).T
-        u = (pts_2d[:, 0] / (pts_2d[:, 2] + 1e-8) / 848.0 * w).astype(int)
-        v = (pts_2d[:, 1] / (pts_2d[:, 2] + 1e-8) / 480.0 * h).astype(int)
-        valid = (pts_cam[:, 2] > 0) & (u >= 0) & (u < w) & (v >= 0) & (v < h)
-        d_valid = pts_cam[valid, 2]
-        if len(d_valid) > 0:
-            d_min, d_max = d_valid.min(), d_valid.max()
-            d_norm = (d_valid - d_min) / (d_max - d_min + 1e-8)
-            u_v, v_v = u[valid], v[valid]
-            base = np.array(color, dtype=float) / 255.0
-            for i in range(len(u_v)):
-                c = base * (1.0 - 0.3 * d_norm[i])
-                cv2.circle(canvas, (u_v[i], v_v[i]), 2,
-                           (int(c[0]*255), int(c[1]*255), int(c[2]*255)), -1)
-    else:
-        mins = pts_np.min(axis=0)
-        maxs = pts_np.max(axis=0)
-        span = (maxs - mins).max() + 1e-8
-        margin = 15
-        u = ((pts_np[:, 0] - mins[0]) / span * (w - 2*margin) + margin).astype(int)
-        v = ((pts_np[:, 2] - mins[2]) / span * (h - 2*margin - 15) + margin + 15).astype(int)
-        for i in range(len(u)):
-            if 0 <= u[i] < w and 0 <= v[i] < h:
-                cv2.circle(canvas, (u[i], v[i]), 2, color, -1)
-    if label:
-        cv2.putText(canvas, label, (5, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
-    return canvas
-
-
-def _draw_overlay(pred_pts, gt_pts, h, w, cam_settings=None, coord_transform=None):
-    """Draw GT (cyan) and Pred (red) overlaid."""
-    canvas = np.zeros((h, w, 3), dtype=np.uint8)
-    pred_np = pred_pts.detach().cpu().numpy() if torch.is_tensor(pred_pts) else pred_pts
-    gt_np = gt_pts.detach().cpu().numpy() if torch.is_tensor(gt_pts) else gt_pts
-
-    if cam_settings is not None and coord_transform is not None:
-        K = cam_settings['k']
-        w2c = cam_settings['w2c']
-        R_cam = w2c[:3, :3]
-        t_cam = w2c[:3, 3]
-
-        def project(p):
-            pt = torch.tensor(p, dtype=torch.float32).cuda()
-            pw = coord_transform.inverse_transform(pt).cpu().numpy()
-            pc = (R_cam @ pw.T + t_cam.reshape(3, 1)).T
-            p2 = (K @ pc.T).T
-            uu = (p2[:, 0] / (p2[:, 2] + 1e-8) / 848.0 * w).astype(int)
-            vv = (p2[:, 1] / (p2[:, 2] + 1e-8) / 480.0 * h).astype(int)
-            ok = (pc[:, 2] > 0) & (uu >= 0) & (uu < w) & (vv >= 0) & (vv < h)
-            return uu, vv, ok
-
-        gu, gv, gok = project(gt_np)
-        pu, pv, pok = project(pred_np)
-        for i in range(len(gu)):
-            if gok[i]:
-                cv2.circle(canvas, (gu[i], gv[i]), 2, (0, 255, 255), -1)
-        for i in range(len(pu)):
-            if pok[i]:
-                cv2.circle(canvas, (pu[i], pv[i]), 2, (0, 0, 255), -1)
-
-    cv2.putText(canvas, 'GT+Pred Overlay', (5, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
-    cv2.putText(canvas, 'GT', (w - 70, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
-    cv2.putText(canvas, 'Pred', (w - 35, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
-    return canvas
-
-
-@torch.no_grad()
-def make_training_debug_panel(render_loss_module, pred_particles, gt_particles, step,
-                               episode_name, iteration, mde_val=None):
-    """Create comparison panel for wandb logging during training.
-
-    Layout (2 rows × 3 columns):
-      Row 1 (Images):  [GT Image       | Rendered        | Diff×3 + L1/SSIM ]
-      Row 2 (Points):  [GT PC (green)  | Pred PC (blue)  | Overlay GT+Pred   ]
-    """
-    try:
-        from train.render_loss_ablation2 import compute_mesh_from_particles, project_vertex_colors
-    except ImportError:
-        return None
-
-    rlm = render_loss_module
-    if rlm is None or not rlm.active:
-        return None
-
-    cam = rlm.cam_settings
-    ct = rlm.coord_transform
-    if cam is None or ct is None:
-        return None
-
-    col_w = 424
-    row_h = 320
-    gap = 3
-    header_h = 30
-    row_label_h = 20
-    total_w = 3 * col_w + 2 * gap
-    total_h = header_h + 2 * (row_label_h + row_h) + gap
-    canvas = np.zeros((total_h, total_w, 3), dtype=np.uint8)
-    font = cv2.FONT_HERSHEY_SIMPLEX
-
-    # Header
-    header = f'iter {iteration} | {episode_name} step {step}'
-    if mde_val is not None:
-        header += f' | MDE={mde_val:.4f}'
-    cv2.putText(canvas, header, (5, 22), font, 0.6, (255, 255, 255), 1)
-
-    pred = pred_particles[0].detach() if pred_particles.dim() == 3 else pred_particles.detach()
-    gt = gt_particles[0].detach() if gt_particles.dim() == 3 else gt_particles.detach()
-
-    def cell_origin(row, col):
-        x = col * (col_w + gap)
-        y = header_h + row * (row_label_h + row_h + gap) + row_label_h
-        return x, y
-
-    def label_origin(row, col):
-        x = col * (col_w + gap)
-        y = header_h + row * (row_label_h + row_h + gap)
-        return x, y
-
-    # =========================================================================
-    # Row 0: IMAGES — [GT Image | Rendered | Diff×3]
-    # =========================================================================
-    lx, ly = label_origin(0, 0)
-    cv2.putText(canvas, 'IMAGES', (lx + 5, ly + 15), font, 0.45, (150, 150, 150), 1)
-
-    # Col 0: GT Image
-    cx, cy = cell_origin(0, 0)
-    gt_image = rlm.gt_loader.load_frame(step)
-    gt_mask = rlm.gt_loader.load_mask(step) if gt_image is not None else None
-    gt_rgb = None
-    if gt_image is not None:
-        gt_np = gt_image.detach().cpu().clamp(0, 1).permute(1, 2, 0).numpy()
-        if gt_mask is not None:
-            gt_np = gt_np * gt_mask.detach().cpu().permute(1, 2, 0).numpy()
-        gt_rgb = (gt_np * 255).astype(np.uint8)
-        gt_resized = cv2.resize(gt_rgb, (col_w, row_h))
-        canvas[cy:cy+row_h, cx:cx+col_w] = cv2.cvtColor(gt_resized, cv2.COLOR_RGB2BGR)
-        cv2.putText(canvas, 'GT Image', (cx+5, cy+20), font, 0.45, (200, 200, 200), 1)
-
-    # Col 1 & 2: Rendered + Diff
-    l1_val = 0.0
-    ssim_val = 0.0
-    try:
-        mesh_data = compute_mesh_from_particles(pred.cuda(), method='bpa')
-        faces = mesh_data.face
-        n_verts = mesh_data.pos.shape[0]
-        vertices = pred[:n_verts].cuda()
-
-        vertex_colors = project_vertex_colors(
-            vertices_preproc=vertices.detach(),
-            image=gt_image,
-            cam_settings=cam,
-            coord_transform=ct,
-        )
-
-        rendered_image, _ = rlm.renderer(
-            vertices=vertices,
-            faces=faces,
-            vertex_colors=vertex_colors,
-            cam_settings=cam,
-            coord_transform=ct,
-        )
-
-        rendered_np = rendered_image.detach().cpu().clamp(0, 1).permute(1, 2, 0).numpy()
-        rendered_rgb = (rendered_np * 255).astype(np.uint8)
-        rendered_resized = cv2.resize(rendered_rgb, (col_w, row_h))
-
-        # Col 1: Rendered
-        cx1, cy1 = cell_origin(0, 1)
-        canvas[cy1:cy1+row_h, cx1:cx1+col_w] = cv2.cvtColor(rendered_resized, cv2.COLOR_RGB2BGR)
-        cv2.putText(canvas, 'Rendered', (cx1+5, cy1+20), font, 0.45, (200, 200, 200), 1)
-
-        # Compute L1 and SSIM
-        if gt_image is not None:
-            gt_for_loss = gt_image.detach()
-            if gt_mask is not None:
-                gt_for_loss = gt_for_loss * gt_mask.detach()
-                rendered_masked = rendered_image.detach() * gt_mask.detach()
-            else:
-                rendered_masked = rendered_image.detach()
-            l1_val = F.l1_loss(rendered_masked, gt_for_loss).item()
-            try:
-                from kornia.metrics import ssim as kornia_ssim
-                ssim_map = kornia_ssim(rendered_masked.unsqueeze(0), gt_for_loss.unsqueeze(0), window_size=11)
-                ssim_val = ssim_map.mean().item()
-            except ImportError:
-                try:
-                    from kornia.losses import ssim_loss as _ssim_loss
-                    ssim_val = 1.0 - _ssim_loss(rendered_masked.unsqueeze(0), gt_for_loss.unsqueeze(0), window_size=11).item()
-                except Exception:
-                    ssim_val = 0.0
-            except Exception:
-                ssim_val = 0.0
-
-        # Col 2: Diff×3 with metrics
-        cx2, cy2 = cell_origin(0, 2)
-        if gt_rgb is not None:
-            gt_resized_bgr = cv2.cvtColor(cv2.resize(gt_rgb, (col_w, row_h)), cv2.COLOR_RGB2BGR)
-            rendered_bgr = cv2.cvtColor(rendered_resized, cv2.COLOR_RGB2BGR)
-            diff = np.abs(rendered_bgr.astype(float) - gt_resized_bgr.astype(float))
-            diff_amp = np.clip(diff * 3.0, 0, 255).astype(np.uint8)
-            canvas[cy2:cy2+row_h, cx2:cx2+col_w] = diff_amp
-            cv2.putText(canvas, 'Diff 3x', (cx2+5, cy2+20), font, 0.45, (200, 200, 200), 1)
-            cv2.putText(canvas, f'L1={l1_val:.4f}  SSIM={ssim_val:.3f}',
-                        (cx2+5, cy2+row_h-15), font, 0.5, (255, 255, 100), 1)
-
-    except Exception as e:
-        cx1, cy1 = cell_origin(0, 1)
-        err_img = np.zeros((row_h, col_w, 3), dtype=np.uint8)
-        cv2.putText(err_img, f'Render err: {str(e)[:50]}', (10, row_h//2), font, 0.4, (0, 0, 255), 1)
-        canvas[cy1:cy1+row_h, cx1:cx1+col_w] = err_img
-
-    # =========================================================================
-    # Row 1: POINT CLOUDS — [GT PC | Pred PC | Overlay]
-    # =========================================================================
-    lx, ly = label_origin(1, 0)
-    cv2.putText(canvas, 'POINT CLOUDS', (lx + 5, ly + 15), font, 0.45, (150, 150, 150), 1)
-
-    # Col 0: GT Point Cloud
-    cx0, cy0 = cell_origin(1, 0)
-    gt_pc = _draw_point_cloud(gt, h=row_h, w=col_w, color=(0, 255, 128), label='GT PC (green)',
-                               cam_settings=cam, coord_transform=ct)
-    canvas[cy0:cy0+row_h, cx0:cx0+col_w] = gt_pc
-
-    # Col 1: Predicted Point Cloud
-    cx1, cy1 = cell_origin(1, 1)
-    pred_pc = _draw_point_cloud(pred, h=row_h, w=col_w, color=(0, 100, 255), label='Pred PC (blue)',
-                                 cam_settings=cam, coord_transform=ct)
-    canvas[cy1:cy1+row_h, cx1:cx1+col_w] = pred_pc
-
-    # Col 2: Overlay
-    cx2, cy2 = cell_origin(1, 2)
-    overlay = _draw_overlay(pred, gt, h=row_h, w=col_w, cam_settings=cam, coord_transform=ct)
-    canvas[cy2:cy2+row_h, cx2:cx2+col_w] = overlay
-    if mde_val is not None:
-        cv2.putText(canvas, f'MDE={mde_val:.4f}', (cx2+5, cy2+row_h-15), font, 0.5, (255, 255, 100), 1)
-
-    # Convert BGR canvas to RGB for wandb
-    return cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
-### END PHASE 2 VISUALIZATION ###
-
-
-### PHASE 2 ### Curriculum scheduler for dynamics finetuning with frozen renderer
-class RenderLossCurriculum:
-    """Controls lambda_render based on training iteration.
-
-    Default schedule:
-        Phase 2a (0-10k):     geometry only, lambda_render=0
-        Phase 2b (10k-30k):   gentle render, lambda_render=0.1
-        Phase 2c (30k-60k):   render dominant, lambda_render=0.3
-        Phase 2d (60k-100k):  render strong, lambda_render=0.5
-    """
-
-    def __init__(self, schedule=None):
-        if schedule is None:
-            # (start_iter, end_iter, lambda_render)
-            self.schedule = [
-                (0,     2000,   0.0),    # 2a: geometry only warmup (short, baseline already converged)
-                (2000,  20000,  0.1),    # 2b: gentle render signal
-                (20000, 50000,  0.3),    # 2c: render dominant
-                (50000, 200000, 0.5),    # 2d: render strong
-            ]
-        else:
-            self.schedule = schedule
-        self._last_phase = -1
-
-    def get_lambda(self, iteration):
-        """Get lambda_render for current iteration."""
-        for i, (start, end, lam) in enumerate(self.schedule):
-            if start <= iteration < end:
-                if i != self._last_phase:
-                    self._last_phase = i
-                    print(f'[curriculum] Phase {i}: iter {start}-{end}, lambda_render={lam}')
-                return lam
-        # Beyond schedule — use last phase's params
-        return self.schedule[-1][2]
-### END PHASE 2 ###
-
+### ABLATION 2 ### Import mesh-based render loss module
+from train.render_loss_ablation2 import create_render_loss_module_ablation2
+### END ABLATION 2 ###
 
 root: Path = get_root(__file__)
 
@@ -355,25 +46,25 @@ def dataloader_wrapper(dataloader, name):
 def transform_gripper_points(cfg, gripper_points, gripper):
     dx = cfg.sim.num_grids[-1]
 
-    gripper_xyz = gripper[:, :, :, :3]
-    gripper_v = gripper[:, :, :, 3:6]
-    gripper_quat = gripper[:, :, :, 6:10]
+    gripper_xyz = gripper[:, :, :, :3]  # (bsz, num_steps, num_grippers, 3)
+    gripper_v = gripper[:, :, :, 3:6]  # (bsz, num_steps, num_grippers, 3)
+    gripper_quat = gripper[:, :, :, 6:10]  # (bsz, num_steps, num_grippers, 4)
     num_steps = gripper_xyz.shape[1]
     num_grippers = gripper_xyz.shape[2]
-    gripper_mat = kornia.geometry.conversions.quaternion_to_rotation_matrix(gripper_quat)
-    gripper_points = gripper_points[:, None, None].repeat(1, num_steps, num_grippers, 1, 1)
-    gripper_x = gripper_points @ gripper_mat + gripper_xyz[:, :, :, None]
+    gripper_mat = kornia.geometry.conversions.quaternion_to_rotation_matrix(gripper_quat)  # (bsz, num_steps, num_grippers, 3, 3)
+    gripper_points = gripper_points[:, None, None].repeat(1, num_steps, num_grippers, 1, 1)  # (bsz, num_steps, num_grippers, num_points, 3)
+    gripper_x = gripper_points @ gripper_mat + gripper_xyz[:, :, :, None]  # (bsz, num_steps, num_grippers, num_points, 3)
     bsz = gripper_x.shape[0]
     num_points = gripper_x.shape[3]
 
-    gripper_quat_vel = gripper[:, :, :, 10:13]
-    gripper_angular_vel = torch.linalg.norm(gripper_quat_vel, dim=-1, keepdims=True)
-    gripper_quat_axis = gripper_quat_vel / (gripper_angular_vel + 1e-10)
+    gripper_quat_vel = gripper[:, :, :, 10:13]  # (bsz, num_steps, num_grippers, 3)
+    gripper_angular_vel = torch.linalg.norm(gripper_quat_vel, dim=-1, keepdims=True)  # (bsz, num_steps, num_grippers, 1)
+    gripper_quat_axis = gripper_quat_vel / (gripper_angular_vel + 1e-10)  # (bsz, num_steps, num_grippers, 3)
 
-    gripper_v_expand = gripper_v[:, :, :, None].repeat(1, 1, 1, num_points, 1)
-    gripper_points_from_axis = gripper_x - gripper_xyz[:, :, :, None]
+    gripper_v_expand = gripper_v[:, :, :, None].repeat(1, 1, 1, num_points, 1)  # (bsz, num_grippers, num_points, 3)
+    gripper_points_from_axis = gripper_x - gripper_xyz[:, :, :, None]  # (bsz, num_steps, num_grippers, num_points, 3)
     grid_from_gripper_axis = gripper_points_from_axis - \
-        (gripper_quat_axis[:, :, :, None] * gripper_points_from_axis).sum(dim=-1, keepdims=True) * gripper_quat_axis[:, :, :, None]
+        (gripper_quat_axis[:, :, :, None] * gripper_points_from_axis).sum(dim=-1, keepdims=True) * gripper_quat_axis[:, :, :, None]  # (bsz, num_steps, num_grippers, num_particles, 3)
     gripper_v_expand = torch.cross(gripper_quat_vel[:, :, :, None], grid_from_gripper_axis, dim=-1) + gripper_v_expand
     gripper_v = gripper_v_expand.reshape(bsz, num_steps, num_grippers * num_points, 3)
     gripper_x = gripper_x.reshape(bsz, num_steps, num_grippers * num_points, 3)
@@ -440,20 +131,6 @@ class Trainer:
         # logging
         self.verbose = False
         if not cfg.debug:
-            if cfg.resume and cfg.train.resume_iteration > 0:
-                ckpt_path = ckpt_root / f'{cfg.train.resume_iteration:06d}.pt'
-                if ckpt_path.exists():
-                    try:
-                        ckpt_peek = torch.load(ckpt_path, map_location='cpu')
-                        wandb_resume_id = ckpt_peek.get('wandb_run_id', None)
-                        del ckpt_peek
-                        if wandb_resume_id:
-                            print(f'[wandb] Resuming run: {wandb_resume_id}')
-                            os.environ['WANDB_RUN_ID'] = wandb_resume_id
-                            os.environ['WANDB_RESUME'] = 'must'
-                    except Exception as e:
-                        print(f'[wandb] Could not load run ID from checkpoint: {e}')
-            
             logger = Logger(cfg, project='pgnd-train')
             self.logger = logger
 
@@ -554,110 +231,51 @@ class Trainer:
         self.losses_log = losses_log
         self.friction = friction
 
-        ### RENDER LOSS ### Initialize render loss module
-        self.use_render_loss = getattr(cfg.train, 'use_render_loss', False)
+        ### ABLATION 2 ### Initialize mesh-based render loss module
+        # Reads config values if present, otherwise uses defaults.
+        # To disable: set cfg.train.lambda_render = 0 or cfg.train.use_render_loss = false
+        self.use_render_loss = getattr(cfg.train, 'use_render_loss', True)
         if self.use_render_loss:
-            use_mesh_gs = getattr(cfg.train, 'use_mesh_gs', False)
-            _camera_ids = getattr(cfg.train, 'render_camera_ids', None)
-            if _camera_ids is not None:
-                _camera_ids = list(_camera_ids)
-
-            # Multi-camera path: use render_loss_multicam
-            if use_mesh_gs and _camera_ids is not None and create_render_loss_multicam is not None:
-                print(f'[render_loss] Using MULTICAM NEURAL MESH RENDERER (cameras={_camera_ids})')
-                self.render_loss_module = create_render_loss_multicam(
-                    cfg, self.log_root,
-                    lambda_render=getattr(cfg.train, 'lambda_render', 0.1),
-                    lambda_ssim=getattr(cfg.train, 'lambda_ssim', 0.2),
-                    render_every_n_steps=getattr(cfg.train, 'render_every_n_steps', 2),
-                    camera_id=getattr(cfg.train, 'render_camera_id', 1),
-                    camera_ids=_camera_ids,
-                )
-            # Single-camera path: use existing render_loss_ablation2
-            elif use_mesh_gs and create_render_loss_module_ablation2 is not None:
-                print('[render_loss] Using NEURAL MESH RENDERER (ablation 2)')
-                self.render_loss_module = create_render_loss_module_ablation2(
-                    cfg, self.log_root,
-                    lambda_render=getattr(cfg.train, 'lambda_render', 0.1),
-                    lambda_ssim=getattr(cfg.train, 'lambda_ssim', 0.2),
-                    render_every_n_steps=getattr(cfg.train, 'render_every_n_steps', 2),
-                    camera_id=getattr(cfg.train, 'render_camera_id', 1),
-                )
-            elif use_mesh_gs and create_render_loss_module_ablation2 is None:
-                print('[render_loss] WARNING: mesh_gs requested but render_loss_ablation2 not available')
-                self.use_render_loss = False
-                self.render_loss_module = None
-                self._train_episode_names = []
-            elif create_render_loss_module is None:
-                print('[render_loss] WARNING: render_loss module not available, disabling')
-                self.use_render_loss = False
-                self.render_loss_module = None
-                self._train_episode_names = []
-            else:
-                self.render_loss_module = create_render_loss_module(
-                    cfg, self.log_root,
-                    lambda_render=getattr(cfg.train, 'lambda_render', 0.1),
-                    lambda_ssim=getattr(cfg.train, 'lambda_ssim', 0.2),
-                    lambda_dino=getattr(cfg.train, 'lambda_dino', 0.0),
-                    render_every_n_steps=getattr(cfg.train, 'render_every_n_steps', 2),
-                    camera_id=getattr(cfg.train, 'render_camera_id', 1),
-                )
-
-            # Cache episode name mapping
-            if self.render_loss_module is not None:
-                source_dataset_root = self.log_root / str(cfg.train.source_dataset_name)
-                all_episodes = sorted(source_dataset_root.glob('episode_*'))
-                self._train_episode_names = [
-                    ep.name for ep in all_episodes[cfg.train.training_start_episode:cfg.train.training_end_episode]
-                ]
-                _cam_info = getattr(cfg.train, 'render_camera_ids', None) or getattr(cfg.train, 'render_camera_id', 1)
-                print(f'[render_loss] initialized: lambda={getattr(cfg.train, "lambda_render", 0.1)}, '
-                      f'every={getattr(cfg.train, "render_every_n_steps", 2)} steps, '
-                      f'cameras={_cam_info}, '
-                      f'episode_map: {len(self._train_episode_names)} episodes '
-                      f'({self._train_episode_names[0]}..{self._train_episode_names[-1]})')
-            else:
-                self._train_episode_names = []
+            self.render_loss_module = create_render_loss_module_ablation2(
+                cfg, self.log_root,
+                lambda_render=getattr(cfg.train, 'lambda_render', 0.1),
+                lambda_ssim=getattr(cfg.train, 'lambda_ssim', 0.2),
+                lambda_dino=getattr(cfg.train, 'lambda_dino', 0.0),
+                render_every_n_steps=getattr(cfg.train, 'render_every_n_steps', 2),
+                camera_id=getattr(cfg.train, 'render_camera_id', 1),
+                mesh_method=getattr(cfg.train, 'mesh_method', 'bpa'),  # 'bpa' or 'poisson'
+                opacity_threshold=getattr(cfg.train, 'gs_opacity_threshold', 0.1),
+                # GS optimizer params
+                lr_position=getattr(cfg.train, 'gs_lr_position', 1e-4),
+                lr_color=getattr(cfg.train, 'gs_lr_color', 2.5e-3),
+                lr_scale=getattr(cfg.train, 'gs_lr_scale', 5e-3),
+                lr_rotation=getattr(cfg.train, 'gs_lr_rotation', 1e-3),
+                lr_opacity=getattr(cfg.train, 'gs_lr_opacity', 5e-2),
+            )
+            # Cache the mapping from dataset-local index -> global episode name.
+            # The dataset slices source episodes by training_start/end_episode,
+            # so we replicate that logic here.
+            source_dataset_root = self.log_root / str(cfg.train.source_dataset_name)
+            all_episodes = sorted(source_dataset_root.glob('episode_*'))
+            self._train_episode_names = [
+                ep.name for ep in all_episodes[cfg.train.training_start_episode:cfg.train.training_end_episode]
+            ]
+            print(f'[Ablation2] Mesh-GS render loss initialized:')
+            print(f'  lambda_render={getattr(cfg.train, "lambda_render", 0.1)}, '
+                  f'lambda_ssim={getattr(cfg.train, "lambda_ssim", 0.2)}, '
+                  f'lambda_dino={getattr(cfg.train, "lambda_dino", 0.0)}')
+            print(f'  mesh_method={getattr(cfg.train, "mesh_method", "bpa")}, '
+                  f'render_every={getattr(cfg.train, "render_every_n_steps", 2)} steps, '
+                  f'camera={getattr(cfg.train, "render_camera_id", 1)}')
+            print(f'  GS optimizer: lr_pos={getattr(cfg.train, "gs_lr_position", 1e-4)}, '
+                  f'lr_color={getattr(cfg.train, "gs_lr_color", 2.5e-3)}')
+            print(f'  Episode map: {len(self._train_episode_names)} episodes '
+                  f'({self._train_episode_names[0]}..{self._train_episode_names[-1]})')
         else:
             self.render_loss_module = None
             self._train_episode_names = []
-            print('[render_loss] disabled')
-
-        ### PHASE 2 ### Load pre-trained renderer and setup curriculum
-        self.phase2_mode = getattr(cfg.train, 'phase2_mode', False)
-        self.curriculum = None
-
-        if self.phase2_mode and self.render_loss_module is not None:
-            # Load pre-trained renderer weights
-            pretrained_ckpt = getattr(cfg.train, 'pretrained_renderer_ckpt', None)
-            if pretrained_ckpt:
-                renderer_ckpt_path = self.log_root / pretrained_ckpt
-                if renderer_ckpt_path.exists():
-                    ckpt = torch.load(str(renderer_ckpt_path), map_location=self.torch_device)
-                    self.render_loss_module.renderer.load_state_dict(ckpt['renderer'])
-                    print(f'[phase2] Loaded pre-trained renderer from {renderer_ckpt_path}')
-                else:
-                    print(f'[phase2] WARNING: renderer ckpt not found: {renderer_ckpt_path}')
-
-            # Freeze renderer — all gradient flows through particle positions only
-            freeze_renderer = getattr(cfg.train, 'freeze_renderer', True)
-            if freeze_renderer:
-                self.render_loss_module.renderer.requires_grad_(False)
-                self.render_loss_module.renderer.eval()
-                self.render_loss_module.renderer_optimizer = None
-                print('[phase2] Renderer frozen — gradient flows through positions only')
-
-            # Setup curriculum
-            use_curriculum = getattr(cfg.train, 'use_curriculum', True)
-            if use_curriculum:
-                self.curriculum = RenderLossCurriculum()
-                print('[phase2] Curriculum enabled')
-            else:
-                print('[phase2] No curriculum — using fixed lambda_render')
-
-            print('[phase2] Dynamics finetuning mode active')
-        ### END PHASE 2 ###
-        ### END RENDER LOSS ###
+            print('[Ablation2] Render loss disabled')
+        ### END ABLATION 2 ###
     
     def train(self, start_iteration, end_iteration, save=True):
         cfg = self.cfg
@@ -665,10 +283,6 @@ class Trainer:
         for iteration in trange(start_iteration, end_iteration, dynamic_ncols=True):
             if self.material_requires_grad:
                 self.material_optimizer.zero_grad()
-            ### NEURAL RENDERER ### Zero renderer gradients
-            if self.render_loss_module is not None and hasattr(self.render_loss_module, 'renderer_optimizer'):
-                if self.render_loss_module.renderer_optimizer is not None:
-                    self.render_loss_module.renderer_optimizer.zero_grad()
 
             losses = defaultdict(int)
 
@@ -681,47 +295,40 @@ class Trainer:
 
             actions = actions.to(self.torch_device)
 
-            ### RENDER LOSS ### Setup for this episode's batch
+            ### ABLATION 2 ### Setup mesh-GS model for this episode's batch
             render_loss_active = False
             if self.render_loss_module is not None:
                 ep_name = 'unknown'
                 try:
+                    # episode_vec is (batch_size, 2) where [:,0]=episode, [:,1]=frame
                     local_ep_idx = int(episode_vec[0, 0].item()) if episode_vec is not None else 0
-                    
+
                     if local_ep_idx < len(self._train_episode_names):
                         ep_name = self._train_episode_names[local_ep_idx]
                     else:
                         ep_name = f'episode_{local_ep_idx:04d}'
-                    
+
                     render_loss_active = self.render_loss_module.setup_episode(
                         episode_name=ep_name,
                         particles_0=x[0].detach(),
                     )
                 except Exception as e:
-                    print(f'[render_loss] setup failed for {ep_name}: {e}')
+                    print(f'[Ablation2] setup failed for {ep_name}: {e}')
+                    import traceback
+                    traceback.print_exc()
                     render_loss_active = False
-            ### END RENDER LOSS ###
-
-            ### PHASE 2 ### Apply curriculum — adjust lambda_render based on iteration
-            _current_lambda = getattr(cfg.train, 'lambda_render', 0.1)
-            if self.curriculum is not None:
-                _current_lambda = self.curriculum.get_lambda(iteration)
-                if self.render_loss_module is not None:
-                    self.render_loss_module.lambda_render = _current_lambda
-                # Disable render loss entirely during geometry-only phase
-                if _current_lambda == 0:
-                    render_loss_active = False
-            ### END PHASE 2 ###
+            ### END ABLATION 2 ###
 
             if cfg.sim.gripper_points:
                 gripper_points, _ = next(self.gripper_dataloader)
                 gripper_points = gripper_points.to(self.torch_device)
-                gripper_x, gripper_v, gripper_mask = transform_gripper_points(cfg, gripper_points, actions)
+                gripper_x, gripper_v, gripper_mask = transform_gripper_points(cfg, gripper_points, actions)  # (bsz, num_steps, num_grippers, 3)
 
             gt_x, gt_v = gt_states
             gt_x = gt_x.to(self.torch_device)
             gt_v = gt_v.to(self.torch_device)
 
+            # gt_x: (bsz, num_steps_total)
             batch_size = gt_x.shape[0]
             num_steps_total = gt_x.shape[1]
             num_particles = gt_x.shape[2]
@@ -750,8 +357,8 @@ class Trainer:
                 assert len(actions.shape) > 2
                 colliders.initialize_grippers(actions[:, 0])
 
-            enabled = enabled.to(self.torch_device)
-            enabled_mask = enabled.unsqueeze(-1).repeat(1, 1, 3)
+            enabled = enabled.to(self.torch_device)  # (bsz, num_particles)
+            enabled_mask = enabled.unsqueeze(-1).repeat(1, 1, 3)  # (bsz, num_particles, 3)
 
             for step in range(num_steps_total):
                 if num_grippers > 0:
@@ -765,7 +372,7 @@ class Trainer:
                     x_in_gt = x_in_gt + v_in_gt * cfg.sim.dt * cfg.sim.interval
 
                 if cfg.sim.gripper_points:
-                    x = torch.cat([x, gripper_x[:, step]], dim=1)
+                    x = torch.cat([x, gripper_x[:, step]], dim=1)  # gripper_x: (bsz, num_steps, num_particles, 3)
                     v = torch.cat([v, gripper_v[:, step]], dim=1)
                     x_his = torch.cat([x_his, torch.zeros((gripper_x.shape[0], gripper_x.shape[2], cfg.sim.n_history * 3), device=x_his.device, dtype=x_his.dtype)], dim=1)
                     v_his = torch.cat([v_his, torch.zeros((gripper_x.shape[0], gripper_x.shape[2], cfg.sim.n_history * 3), device=v_his.device, dtype=v_his.dtype)], dim=1)
@@ -778,23 +385,23 @@ class Trainer:
 
                 if cfg.sim.gripper_forcing:
                     assert not cfg.sim.gripper_points
-                    gripper_xyz = actions[:, step, :, :3]
-                    gripper_v = actions[:, step, :, 3:6]
-                    x_from_gripper = x_in[:, None] - gripper_xyz[:, :, None]
-                    x_gripper_distance = torch.norm(x_from_gripper, dim=-1)
+                    gripper_xyz = actions[:, step, :, :3]  # (bsz, num_grippers, 3)
+                    gripper_v = actions[:, step, :, 3:6]  # (bsz, num_grippers, 3)
+                    x_from_gripper = x_in[:, None] - gripper_xyz[:, :, None]  # (bsz, num_grippers, num_particles, 3)
+                    x_gripper_distance = torch.norm(x_from_gripper, dim=-1)  # (bsz, num_grippers, num_particles)
                     x_gripper_distance_mask = x_gripper_distance < cfg.model.gripper_radius
-                    x_gripper_distance_mask = x_gripper_distance_mask.unsqueeze(-1).repeat(1, 1, 1, 3)
-                    gripper_v_expand = gripper_v[:, :, None].repeat(1, 1, num_particles, 1)
+                    x_gripper_distance_mask = x_gripper_distance_mask.unsqueeze(-1).repeat(1, 1, 1, 3)  # (bsz, num_grippers, num_particles, 3)
+                    gripper_v_expand = gripper_v[:, :, None].repeat(1, 1, num_particles, 1)  # (bsz, num_grippers, num_particles, 3)
 
-                    gripper_closed = actions[:, step, :, -1] < 0.5
+                    gripper_closed = actions[:, step, :, -1] < 0.5  # (bsz, num_grippers)  # 1: open, 0: close
                     x_gripper_distance_mask = torch.logical_and(x_gripper_distance_mask, gripper_closed[:, :, None, None].repeat(1, 1, num_particles, 3))
 
-                    gripper_quat_vel = actions[:, step, :, 10:13]
-                    gripper_angular_vel = torch.linalg.norm(gripper_quat_vel, dim=-1, keepdims=True)
-                    gripper_quat_axis = gripper_quat_vel / (gripper_angular_vel + 1e-10)
+                    gripper_quat_vel = actions[:, step, :, 10:13]  # (bsz, num_grippers, 3)
+                    gripper_angular_vel = torch.linalg.norm(gripper_quat_vel, dim=-1, keepdims=True)  # (bsz, num_grippers, 1)
+                    gripper_quat_axis = gripper_quat_vel / (gripper_angular_vel + 1e-10)  # (bsz, num_grippers, 3)
 
                     grid_from_gripper_axis = x_from_gripper - \
-                        (gripper_quat_axis[:, :, None] * x_from_gripper).sum(dim=-1, keepdims=True) * gripper_quat_axis[:, :, None]
+                        (gripper_quat_axis[:, :, None] * x_from_gripper).sum(dim=-1, keepdims=True) * gripper_quat_axis[:, :, None]  # (bsz, num_grippers, num_particles, 3)
                     gripper_v_expand = torch.cross(gripper_quat_vel[:, :, None], grid_from_gripper_axis, dim=-1) + gripper_v_expand
 
                     for i in range(gripper_xyz.shape[1]):
@@ -833,23 +440,29 @@ class Trainer:
                     losses['loss_v'] += loss_v
                     self.losses_log['loss_v'] += loss_v.item()
 
-                ### RENDER LOSS ### Compute observation-space loss at this rollout step
+                ### ABLATION 2 ### Compute mesh-based render loss (dual return)
+                loss_gs_step = None
                 if render_loss_active:
                     try:
-                        result = self.render_loss_module.compute_loss(
+                        loss_render_step, loss_gs_step = self.render_loss_module.compute_loss(
                             particles_pred=x,
                             rollout_step=step,
                         )
-                        if isinstance(result, tuple):
-                            render_loss, _ = result
-                        else:
-                            render_loss = result
-                        if render_loss is not None:
-                            losses['loss_render'] += render_loss
-                            self.losses_log['loss_render'] += render_loss.item()
+                        if loss_render_step is not None:
+                            losses['loss_render'] += loss_render_step
+                            self.losses_log['loss_render'] += loss_render_step.item()
+                        if loss_gs_step is not None:
+                            # Accumulate GS loss for dual backward pass
+                            if 'loss_gs' not in losses:
+                                losses['loss_gs'] = loss_gs_step
+                            else:
+                                losses['loss_gs'] += loss_gs_step
+                            self.losses_log['loss_gs'] += loss_gs_step.item()
                     except Exception as e:
-                        print(f'[render_loss] compute failed at step {step}: {e}')
-                ### END RENDER LOSS ###
+                        print(f'[Ablation2] render loss compute failed at step {step}: {e}')
+                        import traceback
+                        traceback.print_exc()
+                ### END ABLATION 2 ###
 
                 with torch.no_grad():
                     if self.loss_factor_x > 0:
@@ -861,7 +474,7 @@ class Trainer:
                         self.losses_log['loss_v_trivial'] += loss_v_trivial.item()
 
                     loss_x_sanity = self.criterion(x_in[enabled_mask > 0], (x - v * cfg.sim.dt * cfg.sim.interval)[enabled_mask > 0]) * self.loss_factor_x
-                    self.losses_log['loss_x_sanity'] += loss_x_sanity.item()
+                    self.losses_log['loss_x_sanity'] += loss_x_sanity.item()  # if > 0 then clipping issue
 
                     if step > 0:
                         loss_x_gt_sanity = self.criterion((gt_x[:, step - 1] + gt_v[:, step] * cfg.sim.dt * cfg.sim.interval)[enabled_mask > 0], gt_x[:, step][enabled_mask > 0]) * self.loss_factor_x
@@ -876,11 +489,18 @@ class Trainer:
                         self.logger.add_scalar(f'main/{loss_k}', loss_v.item(), step=self.total_step_count)
                 self.total_step_count += 1
 
-            loss = sum(losses.values())
+            ### ABLATION 2 ### Dual backward passes
+            # Separate GS loss from dynamics losses
+            loss_gs = losses.pop('loss_gs', None)
+            loss_dynamics = sum(losses.values())  # loss_x, loss_v, loss_render (scaled)
+
+            # Backward 1: Dynamics model (3D geometric loss + scaled render loss)
             try:
-                loss.backward()
+                loss_dynamics.backward()
             except Exception as e:
-                print(f'loss.backward() failed: {e.with_traceback()}')
+                print(f'[Ablation2] dynamics loss.backward() failed: {e}')
+                import traceback
+                traceback.print_exc()
                 continue
 
             if self.material_requires_grad:
@@ -890,10 +510,22 @@ class Trainer:
                     error_if_nonfinite=True)
                 self.material_optimizer.step()
 
-            ### NEURAL RENDERER ### Step renderer optimizer
-            if render_loss_active and self.render_loss_module is not None:
-                if hasattr(self.render_loss_module, 'renderer_optimizer') and self.render_loss_module.renderer_optimizer is not None:
-                    self.render_loss_module.renderer_optimizer.step()
+            # Backward 2: GS parameters (image loss only)
+            if loss_gs is not None and render_loss_active:
+                try:
+                    self.render_loss_module.gs_optimizer.zero_grad()
+                    loss_gs.backward()
+                    gs_grad_norm = clip_grad_norm_(
+                        self.render_loss_module.gs_model.parameters(),
+                        max_norm=10.0,  # GS params are more sensitive
+                        error_if_nonfinite=True) if self.render_loss_module.gs_model is not None else 0.0
+                    self.render_loss_module.gs_optimizer.step()
+                    self.losses_log['gs_grad_norm'] = gs_grad_norm
+                except Exception as e:
+                    print(f'[Ablation2] GS loss.backward() failed: {e}')
+                    import traceback
+                    traceback.print_exc()
+            ### END ABLATION 2 ###
 
             if (iteration + 1) % cfg.train.iteration_log_interval == 0:
                 msgs = [
@@ -913,13 +545,11 @@ class Trainer:
                         'e-|grad| {:.4f}'.format(material_grad_norm),
                     ])
 
-                ### PHASE 2 ### Log curriculum params
-                if self.curriculum is not None:
-                    _lam = self.curriculum.get_lambda(iteration)
-                    msgs.append(f'λ_r {_lam:.2f}')
-                    if save and not cfg.debug:
-                        self.logger.add_scalar('curriculum/lambda_render', _lam, step=self.total_step_count)
-                ### END PHASE 2 ###
+                ### ABLATION 2 ### Log GS optimizer stats
+                if render_loss_active and self.render_loss_module is not None and self.render_loss_module.gs_optimizer is not None:
+                    gs_lr = self.render_loss_module.gs_optimizer.param_groups[0]['lr']
+                    msgs.append('gs-lr {:.2e}'.format(gs_lr))
+                ### END ABLATION 2 ###
 
                 for loss_k, loss_v in self.losses_log.items():
                     msgs.append('{} {:.8f}'.format(loss_k, loss_v / cfg.train.iteration_log_interval))
@@ -940,53 +570,9 @@ class Trainer:
                     self.logger.add_scalar('stat/material_grad_norm', material_grad_norm, step=self.total_step_count)
 
             if save and (iteration + 1) % cfg.train.iteration_save_interval == 0:
-                ckpt_data = {
+                torch.save({
                     'material': self.material.state_dict(),
-                }
-                ### NEURAL RENDERER ### Save renderer weights
-                if self.render_loss_module is not None and hasattr(self.render_loss_module, 'renderer'):
-                    ckpt_data['renderer'] = self.render_loss_module.renderer.state_dict()
-                    if self.render_loss_module.renderer_optimizer is not None:
-                        ckpt_data['renderer_optimizer'] = self.render_loss_module.renderer_optimizer.state_dict()
-                # Save wandb run ID for seamless resume
-                try:
-                    import wandb
-                    if wandb.run is not None:
-                        ckpt_data['wandb_run_id'] = wandb.run.id
-                except Exception:
-                    pass
-                torch.save(ckpt_data, self.ckpt_root / '{:06d}.pt'.format(iteration + 1))
-
-            ### PHASE 2 ### Log debug panel to wandb every 500 iterations
-            _debug_viz_interval = 500
-            if (render_loss_active and save and not cfg.debug
-                    and (iteration + 1) % _debug_viz_interval == 0
-                    and self.render_loss_module is not None):
-                try:
-                    import wandb
-                    # Compute MDE for display
-                    with torch.no_grad():
-                        _mde = torch.norm(x[0] - gt_x[:, num_steps_total - 1][0], dim=-1).mean().item()
-                    # Use last step of rollout
-                    _panel = make_training_debug_panel(
-                        render_loss_module=self.render_loss_module,
-                        pred_particles=x,
-                        gt_particles=gt_x[:, num_steps_total - 1],
-                        step=num_steps_total - 1,
-                        episode_name=ep_name,
-                        iteration=iteration + 1,
-                        mde_val=_mde,
-                    )
-                    if _panel is not None:
-                        wandb.log({
-                            'debug/training_panel': wandb.Image(_panel,
-                                caption=f'iter={iteration+1} {ep_name} step={num_steps_total-1} MDE={_mde:.4f}'),
-                            'debug/render_l1': _mde,
-                        }, step=self.total_step_count)
-                except Exception as e:
-                    if iteration < 2000:
-                        print(f'[debug_panel] Error: {e}')
-            ### END PHASE 2 ###
+                }, self.ckpt_root / '{:06d}.pt'.format(iteration + 1))
 
             if self.material_requires_grad:
                 self.material_lr_scheduler.step()
@@ -1046,12 +632,13 @@ class Trainer:
         if cfg.sim.gripper_points:
             gripper_points, _ = next(eval_gripper_dataloader)
             gripper_points = gripper_points.to(self.torch_device)
-            gripper_x, gripper_v, gripper_mask = transform_gripper_points(cfg, gripper_points, actions)
+            gripper_x, gripper_v, gripper_mask = transform_gripper_points(cfg, gripper_points, actions)  # (bsz, num_steps, num_grippers, 3)
 
         gt_x, gt_v = gt_states
         gt_x = gt_x.to(self.torch_device)
         gt_v = gt_v.to(self.torch_device)
     
+        # gt_states: (bsz, num_steps_total)
         batch_size = gt_x.shape[0]
         num_steps_total = gt_x.shape[1]
         num_particles = gt_x.shape[2]
@@ -1085,7 +672,7 @@ class Trainer:
             colliders.initialize_grippers(actions[:, 0])
 
         enabled = enabled.to(self.torch_device)
-        enabled_mask = enabled.unsqueeze(-1).repeat(1, 1, 3)
+        enabled_mask = enabled.unsqueeze(-1).repeat(1, 1, 3)  # (bsz, num_particles, 3)
 
         colliders_save = colliders.export()
         colliders_save = {key: torch.from_numpy(colliders_save[key])[0].to(x.device).to(x.dtype) for key in colliders_save}
@@ -1105,7 +692,7 @@ class Trainer:
                     x_in = None
 
                 if cfg.sim.gripper_points:
-                    x = torch.cat([x, gripper_x[:, step]], dim=1)
+                    x = torch.cat([x, gripper_x[:, step]], dim=1)  # gripper_points: (bsz, num_steps, num_particles, 3)
                     v = torch.cat([v, gripper_v[:, step]], dim=1)
                     x_his = torch.cat([x_his, torch.zeros((gripper_x.shape[0], gripper_x.shape[2], cfg.sim.n_history * 3), device=x_his.device, dtype=x_his.dtype)], dim=1)
                     v_his = torch.cat([v_his, torch.zeros((gripper_x.shape[0], gripper_x.shape[2], cfg.sim.n_history * 3), device=v_his.device, dtype=v_his.dtype)], dim=1)
@@ -1126,23 +713,23 @@ class Trainer:
 
                 if cfg.sim.gripper_forcing:
                     assert not cfg.sim.gripper_points
-                    gripper_xyz = actions[:, step, :, :3]
-                    gripper_v = actions[:, step, :, 3:6]
-                    x_from_gripper = x_in[:, None] - gripper_xyz[:, :, None]
-                    x_gripper_distance = torch.norm(x_from_gripper, dim=-1)
+                    gripper_xyz = actions[:, step, :, :3]  # (bsz, num_grippers, 3)
+                    gripper_v = actions[:, step, :, 3:6]  # (bsz, num_grippers, 3)
+                    x_from_gripper = x_in[:, None] - gripper_xyz[:, :, None]  # (bsz, num_grippers, num_particles, 3)
+                    x_gripper_distance = torch.norm(x_from_gripper, dim=-1)  # (bsz, num_grippers, num_particles)
                     x_gripper_distance_mask = x_gripper_distance < cfg.model.gripper_radius
-                    x_gripper_distance_mask = x_gripper_distance_mask.unsqueeze(-1).repeat(1, 1, 1, 3)
-                    gripper_v_expand = gripper_v[:, :, None].repeat(1, 1, num_particles, 1)
+                    x_gripper_distance_mask = x_gripper_distance_mask.unsqueeze(-1).repeat(1, 1, 1, 3)  # (bsz, num_grippers, num_particles, 3)
+                    gripper_v_expand = gripper_v[:, :, None].repeat(1, 1, num_particles, 1)  # (bsz, num_grippers, num_particles, 3)
 
-                    gripper_closed = actions[:, step, :, -1] < 0.5
+                    gripper_closed = actions[:, step, :, -1] < 0.5  # (bsz, num_grippers)  # 1: open, 0: close
                     x_gripper_distance_mask = torch.logical_and(x_gripper_distance_mask, gripper_closed[:, :, None, None].repeat(1, 1, num_particles, 3))
 
-                    gripper_quat_vel = actions[:, step, :, 10:13]
-                    gripper_angular_vel = torch.linalg.norm(gripper_quat_vel, dim=-1, keepdims=True)
-                    gripper_quat_axis = gripper_quat_vel / (gripper_angular_vel + 1e-10)
+                    gripper_quat_vel = actions[:, step, :, 10:13]  # (bsz, num_grippers, 3)
+                    gripper_angular_vel = torch.linalg.norm(gripper_quat_vel, dim=-1, keepdims=True)  # (bsz, num_grippers, 1)
+                    gripper_quat_axis = gripper_quat_vel / (gripper_angular_vel + 1e-10)  # (bsz, num_grippers, 3)
 
                     grid_from_gripper_axis = x_from_gripper - \
-                        (gripper_quat_axis[:, :, None] * x_from_gripper).sum(dim=-1, keepdims=True) * gripper_quat_axis[:, :, None]
+                        (gripper_quat_axis[:, :, None] * x_from_gripper).sum(dim=-1, keepdims=True) * gripper_quat_axis[:, :, None]  # (bsz, num_grippers, num_particles, 3)
                     gripper_v_expand = torch.cross(gripper_quat_vel[:, :, None], grid_from_gripper_axis, dim=-1) + gripper_v_expand
 
                     for i in range(gripper_xyz.shape[1]):
@@ -1196,6 +783,7 @@ class Trainer:
                 plt.grid()
                 plt.savefig(state_root / f'episode_{episode:04d}_{loss_k}.png', dpi=300)
 
+            # particle visualization
             if self.use_pv:
                 do_train_pv(
                     cfg,
@@ -1207,6 +795,7 @@ class Trainer:
                     eval_postfix='',
                 )
 
+            # gaussian splatting visualization
             if self.use_gs:
                 from .gs import do_gs
                 do_gs(
@@ -1222,6 +811,7 @@ class Trainer:
                     with_bg=True,
                 )
 
+            # particle visualization of ground truth
             if self.use_pv:
                 _ = do_dataset_pv(
                     cfg,
@@ -1260,7 +850,7 @@ class Trainer:
         if not save:
             return
 
-        metrics_list = np.array(metrics_list)[:, 0]
+        metrics_list = np.array(metrics_list)[:, 0]  # (n_episodes, n_frames, 10 or 3)
         if self.use_gs:
             metric_names = ['mde', 'chamfer', 'emd', 'jscore', 'fscore', 'jfscore', 'perception', 'psnr', 'ssim']
         else:
@@ -1273,6 +863,7 @@ class Trainer:
         std_metric = np.std(metrics_list, axis=0)
 
         for i, metric_name in enumerate(metric_names):
+            # plot error
             x = np.arange(1, len(median_metric) + 1)
             plt.figure(figsize=(8, 5))
             plt.plot(x, median_metric[:, i])
@@ -1289,6 +880,7 @@ class Trainer:
             plt.savefig(os.path.join(save_dir, f'{i:02d}-{metric_name}.png'), dpi=300)
             plt.close()
         
+        # send to wandb
         if not cfg.debug:
             for i, metric_name in enumerate(metric_names):
                 self.logger.add_scalar(f'metric/{metric_name}-mean', mean_metric[:, i].mean(), step=self.total_step_count)

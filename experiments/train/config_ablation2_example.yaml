@@ -1,0 +1,71 @@
+# Configuration Example for Ablation 2a/2b/2c
+# =============================================
+#
+# This config extends the base PGND config with mesh-constrained Gaussian Splatting.
+# Place this in experiments/configs/ and import the base config.
+#
+# Usage:
+#   python experiments/train/train_eval_ablation2.py --config-name=ablation2a
+
+train:
+  # Base training params (same as baseline PGND)
+  num_iterations: 100000
+  batch_size: 1
+  training_start_episode: 0
+  training_end_episode: 286  # All matched episodes with .splat files
+
+  # Enable render loss
+  use_render_loss: true
+
+  # Render loss weights
+  lambda_render: 0.1      # Weight for render loss in dynamics backward
+  lambda_ssim: 0.2        # Weight for SSIM vs L1 in image loss
+  lambda_dino: 0.0        # Weight for DINOv2 feature loss (0.0 = disabled)
+                          # Set to 0.5 for Ablation 2b (DINOv2)
+                          # Set to 0.25 for Ablation 2c (both SSIM + DINOv2)
+
+  # Rendering configuration
+  render_every_n_steps: 2 # Render every N rollout steps (higher = faster but less signal)
+  render_camera_id: 1     # Which camera to use (0-3)
+
+  # Mesh method
+  mesh_method: 'bpa'      # 'bpa' (1:1 vertex mapping) or 'poisson' (RBF interpolation)
+
+  # GS parameter filtering
+  gs_opacity_threshold: 0.1  # Filter Gaussians below this opacity
+
+  # GS optimizer learning rates (separate from dynamics model)
+  # These are tuned for mesh-constrained GS - reduce if unstable
+  gs_lr_position: 1.0e-4  # Learning rate for barycentric coordinates
+  gs_lr_color: 2.5e-3     # Learning rate for RGB colors
+  gs_lr_scale: 5.0e-3     # Learning rate for scales
+  gs_lr_rotation: 1.0e-3  # Learning rate for rotations
+  gs_lr_opacity: 5.0e-2   # Learning rate for opacities
+
+  # Dynamics model optimizer (same as baseline)
+  material_lr: 1.0e-4
+  material_grad_max_norm: 10.0
+
+# Ablation variants:
+# ------------------
+# Ablation 2a (SSIM):
+#   lambda_ssim: 0.2, lambda_dino: 0.0
+#
+# Ablation 2b (DINOv2):
+#   lambda_ssim: 0.0, lambda_dino: 1.0
+#
+# Ablation 2c (SSIM + DINOv2):
+#   lambda_ssim: 0.2, lambda_dino: 0.5
+
+# Expected output structure:
+# --------------------------
+# experiments/log/
+#   ├── gs_checkpoints/              # Mesh-GS model checkpoints per episode
+#   │   ├── episode_0162/
+#   │   │   ├── mesh.npz
+#   │   │   ├── gaussian_params.npz
+#   │   │   └── anchoring.npz
+#   │   └── ...
+#   ├── render_loss_ablation2_debug/ # Debug visualizations
+#   │   └── debug_*.jpg
+#   └── wandb/                        # W&B logs with dual loss curves

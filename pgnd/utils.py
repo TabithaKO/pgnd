@@ -41,7 +41,7 @@ def cfg2dict(cfg: DictConfig) -> Dict:
 
 class Logger:
 
-    def __init__(self, cfg, project='pgnd-train', entity='kaiz'):
+    def __init__(self, cfg, project='pgnd-train', entity='tabby-research'):
         wandb.init(project=project, entity=entity, name=cfg.train.name)
         wandb.config = cfg2dict(cfg)
     

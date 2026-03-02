@@ -211,3 +211,6 @@ weights/
 
 /third-party/*
 !/third-party/diff-gaussian-rasterization-w-depth
+
+cloth-splatting/
+experiments/log/
